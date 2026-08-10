@@ -11,6 +11,7 @@ import {
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
+  VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
@@ -21,6 +22,7 @@ import {
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
+  httpRouteWithRule,
   ingressClassParameters,
   ingressPath,
   ingressWithPaths,
@@ -90,6 +92,7 @@ describe('bundled versions', () => {
         'IngressClass',
         'PersistentVolume',
         'PersistentVolumeClaim',
+        'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
       expect(schema.for('StatefulSet')?.apiVersion, version).toBe('apps/v1');
@@ -102,6 +105,7 @@ describe('bundled versions', () => {
       expect(schema.for('IngressClass')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('PersistentVolume')?.apiVersion, version).toBe('v1');
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
+      expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
     }
   });
 
@@ -196,6 +200,30 @@ describe('bundled versions', () => {
     for (const version of AVAILABLE_VERSIONS) {
       const { findings } = lint(VALID_PERSISTENTVOLUMECLAIM, await schemaFor(version));
       expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('lints a valid HTTPRoute cleanly on every version', async () => {
+    // The twelfth root, and the first one sourced from a CRD rather than the
+    // k8s swagger — HTTPRoute's definitions are the same on every k8s
+    // version, pinned instead to one Gateway API release, so this is the
+    // tripwire for that half of generation rather than for a per-version diff.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_HTTPROUTE, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks an HTTPRoute the same way on every version', async () => {
+    // Its schema does not vary with the selected Kubernetes version at all,
+    // so the same manifest has to produce the same findings across the range.
+    const yaml = httpRouteWithRule(
+      '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+        '      filters:\n        - type: RequestRedirect\n          requestRedirect:\n            statusCode: 302\n' +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['httproute/redirect-with-backend-refs']);
     }
   });
 

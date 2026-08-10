@@ -15,6 +15,11 @@ interface EnumSpec {
  * Enum values, keyed by the definition that owns the field. The Kubernetes
  * OpenAPI document does not carry `enum`, so these are transcribed from the
  * v1.36 field descriptions and API types.
+ *
+ * HTTPRoute is the exception: its schema is generated from a CRD, which
+ * (unlike the hand-written Kubernetes API types) states `enum` directly, so
+ * `schema/enum` in `schema.ts` already reports an invalid value for every
+ * enum field HTTPRoute has. Adding entries for it here would double-report.
  */
 const ENUMS: Record<string, EnumSpec> = {
   'PodSpec.restartPolicy': {

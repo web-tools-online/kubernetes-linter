@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -117,8 +117,8 @@ reads: on a kind that lives outside namespaces (IngressClass, PersistentVolume) 
 reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
-a Service, an Ingress, an IngressClass, a PersistentVolume and a PersistentVolumeClaim describe
-no Pod at all. Its absence is what makes `POD_RULES` skip the kind
+a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim and an
+HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
 (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -132,10 +132,10 @@ for a message. There are no `['spec', …]` literals left in the PodSpec rules; 
 silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
-`rules/persistentvolume.ts` and `rules/persistentvolumeclaim.ts`, which address `spec.selector`,
-`spec.strategy`, `spec.updateStrategy`, `spec.completionMode`, `spec.schedule`, `spec.ports`,
-`spec.rules`, `spec.controller`, `spec.accessModes`, `spec.capacity` and the like — fields of
-the object itself, not of any pod spec.
+`rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts` and `rules/httproute.ts`, which
+address `spec.selector`, `spec.strategy`, `spec.updateStrategy`, `spec.completionMode`,
+`spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`, `spec.accessModes`,
+`spec.capacity` and the like — fields of the object itself, not of any pod spec.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -144,8 +144,8 @@ is kind-correct for free.
 
 Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem wherever it lives —
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
-`ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` for checks on
-the object itself. The two document-level rules are named for what they check rather than for a
+`ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
+`httproute/*` for checks on the object itself. The two document-level rules are named for what they check rather than for a
 kind, since they run for every kind including one with no Pod: `meta/*` in `metadata.ts` and
 `enum/*` in `enums.ts`. `Schema` is per version and holds every root; `Schema.for(kind)`
 returns the `KindSchema` view that both lint layers actually use.
@@ -264,6 +264,43 @@ the one version-gated field on both kinds, arriving in 1.29 alongside `VolumeRes
 replacing `ResourceRequirements` as the type of a claim's `resources` — a rename the schema-driven
 walk does not need to know about, since it only ever reads `resources.requests.storage` by key.
 
+`httproute.ts` is the sixth, and the odd one out: it is a Gateway API kind, not a core
+Kubernetes one, so its schema does not come from `kubernetes/kubernetes`'s `swagger.json` at
+all — there is no `io.k8s.api.…HTTPRoute` definition to point `ROOTS` at, because Gateway API
+ships as CRDs from `kubernetes-sigs/gateway-api`, installed independently of the cluster.
+`scripts/generate-schema.mjs` fetches and flattens the HTTPRoute CRD's `openAPIV3Schema` once
+(`buildGatewayDefinitions()`), from one pinned Gateway API release (`GATEWAY_API_VERSION`)
+rather than per Kubernetes minor, and embeds the same ~22 definitions in every bundle — so
+`ctx.supports()` gates never close for an HTTPRoute field, and the picker's Kubernetes version
+changes nothing about how an HTTPRoute is checked. The CRD schema is already inlined (no
+`$ref` of its own), so `flattenGatewayNode()` re-derives named definitions from a hand-kept
+`HTTPROUTE_TYPES` path-to-Go-type map, checking that any two paths mapping to the same name
+produce the same shape before reusing it — `ParentReference` is one such case, reached both
+from `spec.parentRefs` and from `status.parents[].parentRef`. Two subtrees are replaced
+wholesale by definitions the bundle already carries rather than flattened on their own:
+`metadata` (a CRD's schema states only `{ type: object }` for it) becomes a `$ref` to meta/v1
+`ObjectMeta`, and `status.parents[].conditions[]` — field for field the same as a Service's own
+status conditions — becomes a `$ref` to meta/v1 `Condition`.
+
+Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
+and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
+markers, unlike the hand-written Kubernetes API types the other eleven kinds come from, where
+`rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
+Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
+gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
+`schema/out-of-range`, `schema/list-size`), purely additively — no k8s bundle definition sets
+any of them, so the other eleven kinds are unaffected. That leaves `httproute.ts` with only
+what the CRD's schema cannot express at all: its `x-kubernetes-validations` (CEL) rules, which
+`generate-schema.mjs` strips during flattening since layer 1 cannot evaluate CEL, and which are
+reimplemented by hand instead — filter `type` agreeing with its populated field, `parentRefs`
+sharing a parent needing distinct `sectionName`s, a `ReplacePrefixMatch` rewrite needing exactly
+one `PathPrefix` match, a Service `backendRef` needing a `port`, and the rest of the checks in
+the rule table above. A match path's character-set and `/../`-style restrictions are CEL-only
+too — they would have to vary the field's own `pattern` with a sibling `type`, which OpenAPI
+cannot express — so they are hand-checked the same way `rules/ingress.ts` checks an Ingress
+path. Deliberately skipped: anything CEL only bounds for its own sake without describing a
+contradiction, mirroring how `job.ts` skips the size caps that only bound `.status`.
+
 **Adding a further kind**, in order:
 
 1. A root in `ROOTS` (`scripts/generate-schema.mjs`), then `npm run gen:schema` to regenerate
@@ -294,8 +331,12 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(217 defs at 1.36, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
-generatedAt, roots, definitions }`. One file per version rather than one per kind: the Deployment
+(217 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 239 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
+that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
+definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
+swagger half. One file per version rather than one per kind: the Deployment
 closure is a near-total superset of Pod's, the StatefulSet one adds little beyond
 `PersistentVolumeClaim`, the DaemonSet one adds only its own spec and update strategy, and the
 Job one only its spec and the two policies hanging off it, so per-kind files would be
@@ -327,9 +368,9 @@ them property-by-property would produce nonsense.
 - Rule IDs are `pod/<thing>` for PodSpec checks and `deployment/<thing>` / `statefulset/<thing>`
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
-  `persistentvolumeclaim/<thing>` for checks on the object itself; the rules that run for every
-  kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are `schema/<thing>`; parser IDs
-  are `yaml/<thing>`.
+  `persistentvolumeclaim/<thing>` / `httproute/<thing>` for checks on the object itself; the
+  rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
+  `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its
   "More info:" URL via `docsUrlFrom()`.
 - Comments in this codebase explain non-obvious decisions rather than restating code. Match

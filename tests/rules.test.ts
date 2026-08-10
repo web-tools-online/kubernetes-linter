@@ -3,6 +3,7 @@ import {
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
+  VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
@@ -19,6 +20,8 @@ import {
   expectNoRule,
   expectRule,
   expectRules,
+  httpRoute,
+  httpRouteWithRule,
   ingress,
   ingressClass,
   ingressClassParameters,
@@ -3627,6 +3630,235 @@ describe('persistentvolume', () => {
         ),
         [],
       );
+    });
+  });
+});
+
+describe('httproute', () => {
+  it('accepts a valid HTTPRoute', () => {
+    expectRules(VALID_HTTPROUTE, []);
+  });
+
+  describe('parentRefs', () => {
+    it('requires sectionName when two refs point at the same parent', () => {
+      const yaml = httpRoute(
+        '  parentRefs:\n    - name: shared-gateway\n    - name: shared-gateway\n' +
+          '  rules:\n    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      const finding = expectRule(yaml, 'httproute/parent-ref-needs-section-name');
+      expect(finding.message).toContain('sectionName');
+    });
+
+    it('accepts two refs to the same parent with distinct sectionNames', () => {
+      const yaml = httpRoute(
+        '  parentRefs:\n    - name: shared-gateway\n      sectionName: http\n' +
+          '    - name: shared-gateway\n      sectionName: https\n' +
+          '  rules:\n    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRules(yaml, []);
+    });
+
+    it('rejects two refs to the same parent naming the same sectionName', () => {
+      const yaml = httpRoute(
+        '  parentRefs:\n    - name: shared-gateway\n      sectionName: http\n' +
+          '    - name: shared-gateway\n      sectionName: http\n' +
+          '  rules:\n    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/duplicate-parent-ref-section');
+    });
+
+    it('does not flag two refs to different parents', () => {
+      const yaml = httpRoute(
+        '  parentRefs:\n    - name: gateway-a\n    - name: gateway-b\n' +
+          '  rules:\n    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRules(yaml, []);
+    });
+  });
+
+  it('rejects more than 128 matches across all rules', () => {
+    const oneRuleWith = (n: number) => {
+      const matches = Array.from(
+        { length: n },
+        (_, i) => `        - path:\n            type: Exact\n            value: /r${i}\n`,
+      ).join('');
+      return `    - matches:\n${matches}      backendRefs:\n        - name: web\n          port: 80\n`;
+    };
+    const yaml = httpRouteWithRule(oneRuleWith(50) + oneRuleWith(50) + oneRuleWith(50));
+    const finding = expectRule(yaml, 'httproute/too-many-matches');
+    expect(finding.message).toContain('150');
+  });
+
+  it('rejects a RequestRedirect filter alongside backendRefs on the same rule', () => {
+    const yaml = httpRouteWithRule(
+      '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+        '      filters:\n        - type: RequestRedirect\n          requestRedirect:\n            statusCode: 302\n' +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    );
+    expectRule(yaml, 'httproute/redirect-with-backend-refs');
+  });
+
+  describe('ReplacePrefixMatch', () => {
+    it('requires exactly one PathPrefix match', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: Exact\n            value: /a\n' +
+          '      filters:\n        - type: URLRewrite\n          urlRewrite:\n            path:\n' +
+          '              type: ReplacePrefixMatch\n              replacePrefixMatch: /b\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/replace-prefix-needs-single-match');
+    });
+
+    it('accepts it with exactly one PathPrefix match', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /a\n' +
+          '      filters:\n        - type: URLRewrite\n          urlRewrite:\n            path:\n' +
+          '              type: ReplacePrefixMatch\n              replacePrefixMatch: /b\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectNoRule(yaml, 'httproute/replace-prefix-needs-single-match');
+    });
+  });
+
+  describe('backend references', () => {
+    it('requires a port on a Service backendRef', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n',
+      );
+      expectRule(yaml, 'httproute/backend-port-required');
+    });
+
+    it('does not require a port on a non-Service backendRef', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          group: example.com\n          kind: Function\n',
+      );
+      expectNoRule(yaml, 'httproute/backend-port-required');
+    });
+
+    it('requires a port on a requestMirror Service backendRef too', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n            backendRef:\n              name: shadow\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/backend-port-required');
+    });
+  });
+
+  describe('filters', () => {
+    it('rejects a filter list with both RequestRedirect and URLRewrite', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestRedirect\n          requestRedirect:\n            statusCode: 302\n' +
+          '        - type: URLRewrite\n          urlRewrite:\n            hostname: other.example.com\n',
+      );
+      expectRule(yaml, 'httproute/redirect-and-rewrite');
+    });
+
+    it('rejects the same filter type twice in one list', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestHeaderModifier\n          requestHeaderModifier:\n' +
+          '            add:\n              - name: X-A\n                value: "1"\n' +
+          '        - type: RequestHeaderModifier\n          requestHeaderModifier:\n' +
+          '            add:\n              - name: X-B\n                value: "2"\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/duplicate-filter');
+    });
+
+    it('requires the field matching the declared filter type, both directions', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestHeaderModifier\n          urlRewrite:\n            hostname: other.example.com\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      const mismatches = ruleIds(yaml).filter((id) => id === 'httproute/filter-type-mismatch');
+      expect(mismatches.length).toBe(2);
+    });
+
+    it('rejects requestMirror setting both percent and fraction', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n' +
+          '            backendRef:\n              name: shadow\n              port: 80\n' +
+          '            percent: 10\n            fraction:\n              numerator: 1\n              denominator: 10\n',
+      );
+      expectRule(yaml, 'httproute/mirror-percent-and-fraction');
+    });
+
+    it('rejects a fraction numerator above its denominator', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n' +
+          '            backendRef:\n              name: shadow\n              port: 80\n' +
+          '            fraction:\n              numerator: 11\n              denominator: 10\n',
+      );
+      expectRule(yaml, 'httproute/fraction-numerator-exceeds-denominator');
+    });
+
+    it('requires the field matching a path modifier type, both directions', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      filters:\n        - type: URLRewrite\n          urlRewrite:\n            path:\n' +
+          '              type: ReplaceFullPath\n              replacePrefixMatch: /b\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      const mismatches = ruleIds(yaml).filter((id) => id === 'httproute/path-modifier-mismatch');
+      expect(mismatches.length).toBe(2);
+    });
+  });
+
+  describe('timeouts', () => {
+    it('rejects a backendRequest timeout longer than the request timeout', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n' +
+          '      timeouts:\n        request: 1s\n        backendRequest: 2s\n',
+      );
+      const finding = expectRule(yaml, 'httproute/timeout-order');
+      expect(finding.message).toContain('backendRequest');
+    });
+
+    it('accepts a request timeout of 0s, meaning no limit', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n' +
+          '      timeouts:\n        request: 0s\n        backendRequest: 5s\n',
+      );
+      expectNoRule(yaml, 'httproute/timeout-order');
+    });
+  });
+
+  describe('match paths', () => {
+    it('rejects a relative path', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: PathPrefix\n            value: a\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/path-value');
+    });
+
+    it('rejects a path containing "/../"', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: Exact\n            value: /a/../b\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectRule(yaml, 'httproute/path-value');
+    });
+
+    it('does not apply the same checks to a RegularExpression path', () => {
+      const yaml = httpRouteWithRule(
+        '    - matches:\n        - path:\n            type: RegularExpression\n            value: "^/a.*"\n' +
+          '      backendRefs:\n        - name: web\n          port: 80\n',
+      );
+      expectNoRule(yaml, 'httproute/path-value');
     });
   });
 });
