@@ -6,6 +6,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
   VALID_STATEFULSET,
@@ -25,6 +26,7 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  persistentVolume,
   persistentVolumeClaim,
   pod,
   podWithContainer,
@@ -3266,6 +3268,365 @@ describe('persistentvolumeclaim', () => {
         'accessModes',
         0,
       ]);
+    });
+  });
+});
+
+describe('persistentvolume', () => {
+  it('accepts a valid PersistentVolume', () => {
+    expectRules(VALID_PERSISTENTVOLUME, []);
+  });
+
+  it('runs none of the pod spec rules', () => {
+    const ids = ruleIds(persistentVolume('  containers:\n    - name: web\n      image: a\n'));
+    expect(ids.every((id) => !id.startsWith('pod/'))).toBe(true);
+    expect(ids).toContain('schema/unknown-field');
+  });
+
+  it('rejects a namespace, being cluster-scoped', () => {
+    expectRule(
+      persistentVolume(
+        '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n',
+        '  name: archive\n  namespace: storage\n',
+      ),
+      'meta/namespace-not-allowed',
+    );
+  });
+
+  describe('access modes', () => {
+    it('requires at least one', () => {
+      expectRule(
+        persistentVolume('  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n'),
+        'persistentvolume/missing-access-modes',
+      );
+    });
+
+    it('treats an empty list the same as a missing one', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes: []\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/missing-access-modes',
+      );
+    });
+
+    it('rejects an unknown mode, suggesting a close match', () => {
+      const finding = expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnly\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/invalid-access-mode',
+      );
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['spec', 'accessModes', 0], value: 'ReadWriteOnce' },
+      ]);
+    });
+
+    it('rejects ReadWriteOncePod combined with another mode', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n    - ReadWriteOncePod\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/read-write-once-pod-exclusive',
+      );
+    });
+
+    it('accepts ReadWriteOncePod alone', () => {
+      expectRules(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOncePod\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('capacity', () => {
+    it('requires it', () => {
+      expectRule(
+        persistentVolume('  accessModes:\n    - ReadWriteOnce\n  hostPath:\n    path: /mnt/data\n'),
+        'persistentvolume/missing-capacity',
+      );
+    });
+
+    it('treats an empty object the same as a missing one', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity: {}\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/missing-capacity',
+      );
+    });
+
+    it('rejects a resource other than storage', () => {
+      const finding = expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n    cpu: "1"\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/unsupported-capacity-resource',
+      );
+      expect(finding.message).toContain('cpu');
+    });
+
+    it('rejects capacity with no storage key at all', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    cpu: "1"\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/unsupported-capacity-resource',
+      );
+    });
+
+    it('rejects a zero capacity', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 0\n  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/non-positive-capacity',
+      );
+    });
+
+    it('leaves a malformed quantity to the schema layer', () => {
+      const yaml = persistentVolume(
+        '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: not-a-quantity\n  hostPath:\n    path: /mnt/data\n',
+      );
+      expectRule(yaml, 'schema/quantity');
+      expectNoRule(yaml, 'persistentvolume/non-positive-capacity');
+    });
+  });
+
+  describe('volume source', () => {
+    it('requires one', () => {
+      expectRule(
+        persistentVolume('  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n'),
+        'persistentvolume/missing-volume-source',
+      );
+    });
+
+    it('rejects more than one', () => {
+      const finding = expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n' +
+            '  nfs:\n    server: nfs.example.com\n    path: /export\n',
+        ),
+        'persistentvolume/multiple-volume-sources',
+      );
+      expect(finding.message).toContain('hostPath');
+      expect(finding.message).toContain('nfs');
+    });
+  });
+
+  describe('node affinity', () => {
+    it('requires it for a local volume', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/disks/ssd\n',
+        ),
+        'persistentvolume/missing-node-affinity',
+      );
+    });
+
+    it('requires nodeAffinity.required', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/disks/ssd\n' +
+            '  nodeAffinity: {}\n',
+        ),
+        'persistentvolume/missing-node-affinity-required',
+      );
+    });
+
+    it('rejects empty nodeSelectorTerms', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/disks/ssd\n' +
+            '  nodeAffinity:\n    required:\n      nodeSelectorTerms: []\n',
+        ),
+        'persistentvolume/empty-node-selector-terms',
+      );
+    });
+
+    it('requires values for the In operator in a match expression', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/disks/ssd\n' +
+            '  nodeAffinity:\n    required:\n      nodeSelectorTerms:\n        - matchExpressions:\n' +
+            '            - key: disktype\n              operator: In\n',
+        ),
+        'persistentvolume/selector-values-required',
+      );
+    });
+
+    it('accepts a local volume with node affinity', () => {
+      expectRules(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/disks/ssd\n' +
+            '  nodeAffinity:\n    required:\n      nodeSelectorTerms:\n        - matchExpressions:\n' +
+            '            - key: disktype\n              operator: In\n              values:\n                - ssd\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('hostPath', () => {
+    it('rejects a path with backsteps', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/../data\n',
+        ),
+        'persistentvolume/path-with-backsteps',
+      );
+    });
+
+    it('rejects a root mount with a Recycle reclaim policy', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  persistentVolumeReclaimPolicy: Recycle\n' +
+            '  hostPath:\n    path: /\n',
+        ),
+        'persistentvolume/recycle-host-path-root',
+      );
+    });
+
+    it('accepts a non-root mount with a Recycle reclaim policy', () => {
+      expectNoRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  persistentVolumeReclaimPolicy: Recycle\n' +
+            '  hostPath:\n    path: /mnt/data\n',
+        ),
+        'persistentvolume/recycle-host-path-root',
+      );
+    });
+  });
+
+  describe('local', () => {
+    it('rejects a path with backsteps', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  local:\n    path: /mnt/../disks\n' +
+            '  nodeAffinity:\n    required:\n      nodeSelectorTerms:\n        - matchExpressions:\n' +
+            '            - key: disktype\n              operator: Exists\n',
+        ),
+        'persistentvolume/path-with-backsteps',
+      );
+    });
+  });
+
+  describe('nfs', () => {
+    it('rejects a relative path', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  nfs:\n    server: nfs.example.com\n    path: export/data\n',
+        ),
+        'persistentvolume/relative-nfs-path',
+      );
+    });
+
+    it('accepts an absolute path', () => {
+      expectNoRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  nfs:\n    server: nfs.example.com\n    path: /export/data\n',
+        ),
+        'persistentvolume/relative-nfs-path',
+      );
+    });
+  });
+
+  describe('csi', () => {
+    it('rejects a driver name that is not a DNS subdomain', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+            '  csi:\n    driver: not_a_driver\n    volumeHandle: vol-1\n',
+        ),
+        'persistentvolume/invalid-csi-driver',
+      );
+    });
+
+    it('accepts an upper-case driver name, which the apiserver lowercases first', () => {
+      expectNoRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+            '  csi:\n    driver: EBS.csi.aws.com\n    volumeHandle: vol-1\n',
+        ),
+        'persistentvolume/invalid-csi-driver',
+      );
+    });
+
+    it('rejects a driver name over 63 characters', () => {
+      const longName = `${'a'.repeat(61)}.io`;
+      expectRule(
+        persistentVolume(
+          `  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n` +
+            `  csi:\n    driver: ${longName}\n    volumeHandle: vol-1\n`,
+        ),
+        'persistentvolume/invalid-csi-driver',
+      );
+    });
+  });
+
+  describe('storageClassName', () => {
+    it('rejects one that is not a DNS subdomain', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n' +
+            '  storageClassName: Fast_SSD\n',
+        ),
+        'persistentvolume/invalid-storage-class-name',
+      );
+    });
+
+    it('treats an empty storageClassName as none', () => {
+      expectNoRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n' +
+            '  storageClassName: ""\n',
+        ),
+        'persistentvolume/invalid-storage-class-name',
+      );
+    });
+  });
+
+  describe('volumeAttributesClassName', () => {
+    it('rejects an empty string', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+            '  csi:\n    driver: csi.example.com\n    volumeHandle: vol-1\n  volumeAttributesClassName: ""\n',
+        ),
+        'persistentvolume/empty-volume-attributes-class-name',
+      );
+    });
+
+    it('rejects one that is not a DNS subdomain', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+            '  csi:\n    driver: csi.example.com\n    volumeHandle: vol-1\n  volumeAttributesClassName: Not_Valid\n',
+        ),
+        'persistentvolume/invalid-volume-attributes-class-name',
+      );
+    });
+
+    it('requires a csi source', () => {
+      expectRule(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n  hostPath:\n    path: /mnt/data\n' +
+            '  volumeAttributesClassName: silver\n',
+        ),
+        'persistentvolume/volume-attributes-class-without-csi',
+      );
+    });
+
+    it('accepts one alongside a csi source', () => {
+      expectRules(
+        persistentVolume(
+          '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+            '  csi:\n    driver: csi.example.com\n    volumeHandle: vol-1\n  volumeAttributesClassName: silver\n',
+        ),
+        [],
+      );
     });
   });
 });

@@ -448,3 +448,27 @@ export function persistentVolumeClaim(
 ): string {
   return `apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
 }
+
+/** A minimal valid PersistentVolume that individual tests mutate. */
+export const VALID_PERSISTENTVOLUME = `apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: archive
+spec:
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 10Gi
+  hostPath:
+    path: /mnt/data
+`;
+
+/**
+ * Build a PersistentVolume from a fragment of PersistentVolumeSpec. Like
+ * `persistentVolumeClaim()` the fragment is the whole spec, and like an
+ * IngressClass this kind is cluster-scoped, so the metadata fragment carries
+ * no namespace. Fragments are indented two spaces, matching `pod()`.
+ */
+export function persistentVolume(specFragment: string, metadataFragment = '  name: archive\n'): string {
+  return `apiVersion: v1\nkind: PersistentVolume\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}

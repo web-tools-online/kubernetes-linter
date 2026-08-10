@@ -469,4 +469,35 @@ spec:
     name: reports-data-backup
 `,
   },
+  {
+    id: 'persistentvolume',
+    label: 'A PersistentVolume with problems',
+    blurb:
+      'A namespace on a cluster-scoped object, two access modes that contradict each other, a capacity of zero, a lowercase reclaim policy, and two volume sources — one of them local, which needs node affinity this omits.',
+    yaml: `apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: build-cache
+  # PersistentVolume is cluster-scoped, so a namespace is not allowed on it.
+  namespace: ci
+spec:
+  # ReadWriteOncePod already guarantees the volume to a single Pod, so pairing
+  # it with another mode contradicts that guarantee.
+  accessModes:
+    - ReadWriteMany
+    - ReadWriteOncePod
+  capacity:
+    # A volume with no capacity describes nothing usable.
+    storage: "0"
+  # Reclaim policy values are case-sensitive; "recycle" is not "Recycle".
+  persistentVolumeReclaimPolicy: recycle
+  # Exactly one volume source is allowed, and a local one also needs
+  # nodeAffinity to say which node it lives on — this has neither.
+  local:
+    path: /mnt/disks/ssd0
+  nfs:
+    server: nfs.example.com
+    path: /export/build-cache
+`,
+  },
 ];
