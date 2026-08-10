@@ -10,8 +10,13 @@ const PVC_DOCS = 'https://kubernetes.io/docs/concepts/storage/persistent-volumes
 const SELECTOR_DOCS =
   'https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors';
 
-/** supportedAccessModes, from pkg/apis/core/validation. */
-const ACCESS_MODES = ['ReadWriteOnce', 'ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOncePod'];
+/**
+ * supportedAccessModes, from pkg/apis/core/validation. Exported because
+ * `rules/persistentvolume.ts` checks the very same set — a PersistentVolume
+ * and a PersistentVolumeClaim share one access-mode vocabulary upstream, so a
+ * second copy here could drift from it.
+ */
+export const ACCESS_MODES = ['ReadWriteOnce', 'ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOncePod'];
 
 /**
  * The checks the apiserver runs on a PersistentVolumeClaim, from

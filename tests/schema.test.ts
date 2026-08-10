@@ -123,7 +123,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass and PersistentVolumeClaim',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume and PersistentVolumeClaim',
       );
     });
 
@@ -244,6 +244,12 @@ describe('field descriptions', () => {
     expect(ingressClass.describe(['spec', 'rules'])).toBeUndefined();
   });
 
+  it('resolves a PersistentVolume field, which no other root reaches', () => {
+    const persistentVolume = schema.for('PersistentVolume')!;
+    expect(persistentVolume.describe(['spec', 'csi', 'volumeHandle'])?.type).toBe('string');
+    expect(persistentVolume.describe(['spec', 'containers'])).toBeUndefined();
+  });
+
   it('resolves a Job field, which no other root reaches', () => {
     const job = schema.for('Job')!;
     expect(job.describe(['spec', 'podFailurePolicy', 'rules', 0, 'action'])?.type).toBe('string');
@@ -279,6 +285,7 @@ describe('field descriptions', () => {
       'Service',
       'Ingress',
       'IngressClass',
+      'PersistentVolume',
       'PersistentVolumeClaim',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();

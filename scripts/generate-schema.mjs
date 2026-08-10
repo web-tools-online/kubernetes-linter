@@ -22,9 +22,14 @@
  * them its own. PersistentVolumeClaim costs nothing at all: everything below
  * its spec is already pulled in by StatefulSet's volumeClaimTemplates, so the
  * closure only grows by the PersistentVolumeClaim and PersistentVolumeClaimStatus
- * wrapper definitions. Separate per-kind files would be near-duplicates, and a
- * single bundle also means lint() can switch kinds mid-document without loading
- * anything.
+ * wrapper definitions. PersistentVolume is the one root that is not nearly
+ * free: it shares its metadata and access-mode types with the claim, but its
+ * spec carries the *PersistentVolumeSource* variant of every in-tree volume
+ * plugin (CSIPersistentVolumeSource, ISCSIPersistentVolumeSource, and so on) —
+ * types the PodSpec closure never reaches, since a Pod only ever sees the
+ * inline VolumeSource form. That widens the bundle by about 16 definitions.
+ * Separate per-kind files would be near-duplicates, and a single bundle also
+ * means lint() can switch kinds mid-document without loading anything.
  *
  * Usage:
  *   node scripts/generate-schema.mjs                # every supported version
@@ -49,6 +54,7 @@ const ROOTS = {
   Service: 'io.k8s.api.core.v1.Service',
   Ingress: 'io.k8s.api.networking.v1.Ingress',
   IngressClass: 'io.k8s.api.networking.v1.IngressClass',
+  PersistentVolume: 'io.k8s.api.core.v1.PersistentVolume',
   PersistentVolumeClaim: 'io.k8s.api.core.v1.PersistentVolumeClaim',
 };
 

@@ -73,6 +73,19 @@ const ENUMS: Record<string, EnumSpec> = {
   },
   'ImageVolumeSource.pullPolicy': { values: ['Always', 'Never', 'IfNotPresent'] },
   'PersistentVolumeClaimSpec.volumeMode': { values: ['Filesystem', 'Block'] },
+  'PersistentVolumeSpec.volumeMode': { values: ['Filesystem', 'Block'] },
+  'PersistentVolumeSpec.persistentVolumeReclaimPolicy': {
+    values: ['Retain', 'Recycle', 'Delete'],
+    note: 'Defaults to Retain for a manually created volume, Delete for one provisioned dynamically. Recycle is deprecated.',
+  },
+  'HostPathVolumeSource.type': {
+    values: [
+      'DirectoryOrCreate', 'Directory', 'FileOrCreate', 'File', 'Socket', 'CharDevice',
+      'BlockDevice',
+    ],
+    allowEmpty: true,
+    note: 'An empty value performs no check before mounting the hostPath volume.',
+  },
 
   'ContainerResizePolicy.resourceName': { values: ['cpu', 'memory'] },
   'ContainerResizePolicy.restartPolicy': { values: ['NotRequired', 'RestartContainer'] },
@@ -185,6 +198,9 @@ const ENUMS: Record<string, EnumSpec> = {
   'JobCondition.status': { values: ['True', 'False', 'Unknown'] },
   'PersistentVolumeClaimStatus.phase': { values: ['Pending', 'Bound', 'Lost'] },
   'PersistentVolumeClaimCondition.status': { values: ['True', 'False', 'Unknown'] },
+  'PersistentVolumeStatus.phase': {
+    values: ['Pending', 'Available', 'Bound', 'Released', 'Failed'],
+  },
   'PortStatus.protocol': { values: ['TCP', 'UDP', 'SCTP'] },
   'IngressPortStatus.protocol': { values: ['TCP', 'UDP', 'SCTP'] },
   // meta/v1 Condition, which a ServiceStatus carries.

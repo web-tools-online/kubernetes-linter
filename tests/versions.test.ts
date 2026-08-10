@@ -14,6 +14,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
   VALID_STATEFULSET,
@@ -25,6 +26,7 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  persistentVolume,
   persistentVolumeClaim,
   pod,
   podWithContainer,
@@ -86,6 +88,7 @@ describe('bundled versions', () => {
         'Service',
         'Ingress',
         'IngressClass',
+        'PersistentVolume',
         'PersistentVolumeClaim',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -97,6 +100,7 @@ describe('bundled versions', () => {
       expect(schema.for('Service')?.apiVersion, version).toBe('v1');
       expect(schema.for('Ingress')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('IngressClass')?.apiVersion, version).toBe('networking.k8s.io/v1');
+      expect(schema.for('PersistentVolume')?.apiVersion, version).toBe('v1');
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
     }
   });
@@ -175,8 +179,19 @@ describe('bundled versions', () => {
     }
   });
 
+  it('lints a valid PersistentVolume cleanly on every version', async () => {
+    // The tenth root, and the one whose closure is genuinely new: the
+    // *PersistentVolumeSource variants (CSIPersistentVolumeSource and so on)
+    // are not reachable from any other root, so a regeneration that dropped
+    // them would show up here alone.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_PERSISTENTVOLUME, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
   it('lints a valid PersistentVolumeClaim cleanly on every version', async () => {
-    // The tenth root. Its closure was already pulled in by StatefulSet's
+    // The eleventh root. Its closure was already pulled in by StatefulSet's
     // volumeClaimTemplates, so this is the tripwire for the roots map alone.
     for (const version of AVAILABLE_VERSIONS) {
       const { findings } = lint(VALID_PERSISTENTVOLUMECLAIM, await schemaFor(version));
@@ -332,6 +347,30 @@ describe('StatefulSet fields that came and went', () => {
 
     expect(await ruleIdsAt('1.32', yaml)).toEqual(['schema/required-field']);
     expect(await ruleIdsAt('1.33', yaml)).toEqual([]);
+  });
+});
+
+describe('PersistentVolume fields that came and went', () => {
+  it('accepts spec.volumeAttributesClassName from 1.29', async () => {
+    const yaml = persistentVolume(
+      '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+        '  csi:\n    driver: csi.example.com\n    volumeHandle: vol-1\n  volumeAttributesClassName: silver\n',
+    );
+
+    expect(await ruleIdsAt('1.28', yaml)).toEqual(['schema/unknown-field']);
+    expect(await ruleIdsAt('1.29', yaml)).toEqual([]);
+  });
+
+  it('does not double-report an invalid name on a version without the field', async () => {
+    const yaml = persistentVolume(
+      '  accessModes:\n    - ReadWriteOnce\n  capacity:\n    storage: 10Gi\n' +
+        '  csi:\n    driver: csi.example.com\n    volumeHandle: vol-1\n  volumeAttributesClassName: Not_Valid\n',
+    );
+
+    expect(await ruleIdsAt('1.28', yaml)).toEqual(['schema/unknown-field']);
+    expect(await ruleIdsAt('1.29', yaml)).toContain(
+      'persistentvolume/invalid-volume-attributes-class-name',
+    );
   });
 });
 
