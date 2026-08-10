@@ -6,6 +6,8 @@ import {
   expectRule,
   expectRules,
   findings,
+  httpRoute,
+  httpRouteWithRule,
   pod,
   podWithContainer,
 } from './helpers.js';
@@ -123,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume and PersistentVolumeClaim',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim and HTTPRoute',
       );
     });
 
@@ -181,6 +183,65 @@ describe('schema conformance', () => {
     expect(finding.fix?.ops).toEqual([
       { op: 'set', path: ['spec', 'containers', 0, 'env', 0, 'value'], value: 'false' },
     ]);
+  });
+});
+
+describe('CRD-sourced schema constraints', () => {
+  // The k8s swagger never carries enum/pattern/length/bound keywords (see
+  // rules/enums.ts), so HTTPRoute — generated from a CRD — is the only kind
+  // that exercises this half of layer 1.
+
+  it('reports an invalid enum value with a suggestion', () => {
+    const yaml = httpRouteWithRule(
+      '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+        '      filters:\n        - type: RequestHeaderModifer\n' +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    );
+    const finding = expectRule(yaml, 'schema/enum');
+    expect(finding.message).toContain('Did you mean "RequestHeaderModifier"');
+    expect(finding.fix).toEqual({
+      title: 'Change to "RequestHeaderModifier"',
+      safe: true,
+      ops: [{ op: 'set', path: ['spec', 'rules', 0, 'filters', 0, 'type'], value: 'RequestHeaderModifier' }],
+    });
+  });
+
+  it('reports a hostname that does not match its pattern', () => {
+    const yaml = httpRoute(
+      '  hostnames:\n    - "not a hostname"\n' +
+        '  rules:\n    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    );
+    expectRule(yaml, 'schema/pattern');
+  });
+
+  it('reports a header name over its maxLength', () => {
+    const longName = 'X-'.padEnd(260, 'a');
+    const yaml = httpRouteWithRule(
+      '    - matches:\n        - path:\n            type: PathPrefix\n            value: /\n' +
+        `      filters:\n        - type: RequestHeaderModifier\n          requestHeaderModifier:\n            add:\n              - name: ${longName}\n                value: "1"\n` +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    );
+    const finding = expectRule(yaml, 'schema/string-length');
+    expect(finding.message).toContain('at most 256');
+  });
+
+  it('reports more rules than spec.rules allows', () => {
+    const rules = Array.from(
+      { length: 17 },
+      (_, i) =>
+        `    - matches:\n        - path:\n            type: Exact\n            value: /r${i}\n` +
+        '      backendRefs:\n        - name: web\n          port: 80\n',
+    ).join('');
+    const yaml = httpRoute(`  rules:\n${rules}`);
+    const finding = expectRule(yaml, 'schema/list-size');
+    expect(finding.message).toContain('at most 16');
+  });
+
+  it('does not affect a kind whose bundle carries no such keywords', () => {
+    // Pinning that this is additive: a k8s-sourced kind's schema has no enum,
+    // pattern, minLength/maxLength or minItems/maxItems anywhere in it.
+    expectRules(VALID_POD, []);
   });
 });
 
@@ -256,6 +317,12 @@ describe('field descriptions', () => {
     expect(job.describe(['spec', 'strategy'])).toBeUndefined();
   });
 
+  it('resolves an HTTPRoute field, sourced from a CRD rather than the k8s swagger', () => {
+    const httpRoute = schema.for('HTTPRoute')!;
+    expect(httpRoute.describe(['spec', 'rules', 0, 'matches', 0, 'path', 'type'])?.type).toBe('string');
+    expect(httpRoute.describe(['spec', 'containers'])).toBeUndefined();
+  });
+
   it('resolves a CronJob field nested under its JobTemplateSpec', () => {
     const cronJob = schema.for('CronJob')!;
     expect(
@@ -287,6 +354,7 @@ describe('field descriptions', () => {
       'IngressClass',
       'PersistentVolume',
       'PersistentVolumeClaim',
+      'HTTPRoute',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();
   });

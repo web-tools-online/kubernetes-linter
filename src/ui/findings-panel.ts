@@ -102,7 +102,7 @@ function card(finding: LocatedFinding, callbacks: PanelCallbacks): HTMLElement {
     link.href = finding.docsUrl;
     link.target = '_blank';
     link.rel = 'noreferrer noopener';
-    link.textContent = 'Kubernetes docs ↗';
+    link.textContent = `${docsLabel(finding.docsUrl)} ↗`;
     links.append(link);
   }
   body.append(links);
@@ -113,6 +113,15 @@ function card(finding: LocatedFinding, callbacks: PanelCallbacks): HTMLElement {
 
   element.append(body);
   return element;
+}
+
+/** Most `docsUrl`s point at kubernetes.io; HTTPRoute's point at the Gateway API docs instead. */
+function docsLabel(url: string): string {
+  try {
+    return new URL(url).hostname.endsWith('gateway-api.sigs.k8s.io') ? 'Gateway API docs' : 'Kubernetes docs';
+  } catch {
+    return 'Kubernetes docs';
+  }
 }
 
 function fixSection(finding: LocatedFinding, callbacks: PanelCallbacks): HTMLElement {

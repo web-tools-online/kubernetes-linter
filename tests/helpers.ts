@@ -449,6 +449,41 @@ export function persistentVolumeClaim(
   return `apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
 }
 
+/** A minimal valid HTTPRoute that individual tests mutate. */
+export const VALID_HTTPROUTE = `apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+spec:
+  parentRefs:
+    - name: web-gateway
+  hostnames:
+    - web.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: web
+          port: 80
+`;
+
+/**
+ * Build an HTTPRoute from a fragment of HTTPRouteSpec. Like `ingress()` the
+ * fragment is the whole spec: an HTTPRoute has no pod template to keep
+ * consistent, and most of what it is checked for is which fields may sit next
+ * to which. Fragments are indented two spaces, matching `pod()`.
+ */
+export function httpRoute(specFragment: string, metadataFragment = '  name: web\n'): string {
+  return `apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}
+
+/** An HTTPRoute carrying one rule built from the given fragment. */
+export function httpRouteWithRule(ruleFragment: string): string {
+  return httpRoute(`  rules:\n${ruleFragment}`);
+}
+
 /** A minimal valid PersistentVolume that individual tests mutate. */
 export const VALID_PERSISTENTVOLUME = `apiVersion: v1
 kind: PersistentVolume

@@ -15,6 +15,22 @@ export interface SchemaNode {
   'x-kubernetes-list-type'?: string;
   'x-kubernetes-list-map-keys'?: string[];
   'x-kubernetes-group-version-kind'?: { group: string; version: string; kind: string }[];
+  /**
+   * CRD-sourced keywords the k8s swagger never carries (see `rules/enums.ts`
+   * for why enum values there are hand-transcribed instead): a CRD's OpenAPI
+   * schema, unlike the hand-written Kubernetes API types, is generated from
+   * Go kubebuilder markers and so states these directly. Purely additive —
+   * no k8s bundle definition sets any of them, so existing kinds are
+   * unaffected.
+   */
+  enum?: string[];
+  pattern?: string;
+  minLength?: number;
+  maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
 }
 
 export interface SchemaBundle {
@@ -24,6 +40,13 @@ export interface SchemaBundle {
   /** Kind name -> root definition, e.g. `Pod` -> `io.k8s.api.core.v1.Pod`. */
   roots: Record<string, string>;
   definitions: Record<string, SchemaNode>;
+  /**
+   * The Gateway API release HTTPRoute's definitions were generated from.
+   * Absent from bundles that carry no CRD-sourced root. Gateway API is
+   * installed independently of the cluster, so this does not track
+   * `k8sVersion` the way every other root does.
+   */
+  gatewayApiVersion?: string;
 }
 
 /**
@@ -303,6 +326,7 @@ function walk(
       return;
     }
     checkListUniqueness(value, property, path, findings);
+    checkListSize(value, property, path, findings);
     if (items) {
       value.forEach((item, index) => {
         if (item == null) return;
@@ -374,17 +398,23 @@ function checkPrimitive(
     case 'string':
       if (typeof value !== 'string') {
         findings.push(typeMismatch(path, 'string', value, property.description));
+        break;
       }
+      checkStringConstraints(value, property, path, findings);
       break;
     case 'integer':
       if (typeof value !== 'number' || !Number.isInteger(value)) {
         findings.push(typeMismatch(path, 'integer', value, property.description));
+        break;
       }
+      checkNumberConstraints(value, property, path, findings);
       break;
     case 'number':
       if (typeof value !== 'number') {
         findings.push(typeMismatch(path, 'number', value, property.description));
+        break;
       }
+      checkNumberConstraints(value, property, path, findings);
       break;
     case 'boolean':
       if (typeof value !== 'boolean') {
@@ -393,6 +423,126 @@ function checkPrimitive(
       break;
     default:
       break;
+  }
+}
+
+/**
+ * `pattern` is a CRD-sourced keyword (see `SchemaNode`); the same regexp is
+ * revisited once per array element, so it is worth compiling once per string.
+ */
+const patternCache = new Map<string, RegExp>();
+function compiledPattern(pattern: string): RegExp {
+  let compiled = patternCache.get(pattern);
+  if (!compiled) {
+    compiled = new RegExp(pattern);
+    patternCache.set(pattern, compiled);
+  }
+  return compiled;
+}
+
+function checkStringConstraints(value: string, property: SchemaNode, path: Path, findings: Finding[]): void {
+  if (property.enum && !property.enum.includes(value)) {
+    const suggestion = didYouMean(value, property.enum);
+    const allowed = property.enum.map((entry) => `"${entry}"`).join(', ');
+    findings.push({
+      ruleId: 'schema/enum',
+      severity: 'error',
+      path,
+      message: suggestion
+        ? `"${value}" is not a valid value. Did you mean "${suggestion}"?`
+        : `"${value}" is not a valid value.`,
+      explanation: [`Allowed values are ${allowed}. Values are case-sensitive.`, property.description]
+        .filter(Boolean)
+        .join('\n\n'),
+      docsUrl: docsUrlFrom(property.description),
+      fix: suggestion
+        ? { title: `Change to "${suggestion}"`, safe: true, ops: [{ op: 'set', path, value: suggestion }] }
+        : undefined,
+    });
+    return;
+  }
+
+  if (property.pattern !== undefined && !compiledPattern(property.pattern).test(value)) {
+    findings.push({
+      ruleId: 'schema/pattern',
+      severity: 'error',
+      path,
+      message: `"${value}" does not match the required format.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+    return;
+  }
+
+  if (property.minLength !== undefined && value.length < property.minLength) {
+    findings.push({
+      ruleId: 'schema/string-length',
+      severity: 'error',
+      path,
+      message: `Must be at least ${property.minLength} character${property.minLength === 1 ? '' : 's'}, but is ${value.length}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+    return;
+  }
+
+  if (property.maxLength !== undefined && value.length > property.maxLength) {
+    findings.push({
+      ruleId: 'schema/string-length',
+      severity: 'error',
+      path,
+      message: `Must be at most ${property.maxLength} character${property.maxLength === 1 ? '' : 's'}, but is ${value.length}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+  }
+}
+
+function checkNumberConstraints(value: number, property: SchemaNode, path: Path, findings: Finding[]): void {
+  if (property.minimum !== undefined && value < property.minimum) {
+    findings.push({
+      ruleId: 'schema/out-of-range',
+      severity: 'error',
+      path,
+      message: `Must be at least ${property.minimum}, but is ${value}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+    return;
+  }
+  if (property.maximum !== undefined && value > property.maximum) {
+    findings.push({
+      ruleId: 'schema/out-of-range',
+      severity: 'error',
+      path,
+      message: `Must be at most ${property.maximum}, but is ${value}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+  }
+}
+
+function checkListSize(items: unknown[], property: SchemaNode, path: Path, findings: Finding[]): void {
+  if (property.minItems !== undefined && items.length < property.minItems) {
+    findings.push({
+      ruleId: 'schema/list-size',
+      severity: 'error',
+      path,
+      message: `Must have at least ${property.minItems} item${property.minItems === 1 ? '' : 's'}, but has ${items.length}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
+    return;
+  }
+  if (property.maxItems !== undefined && items.length > property.maxItems) {
+    findings.push({
+      ruleId: 'schema/list-size',
+      severity: 'error',
+      path,
+      message: `Must have at most ${property.maxItems} items, but has ${items.length}.`,
+      explanation: property.description,
+      docsUrl: docsUrlFrom(property.description),
+    });
   }
 }
 

@@ -3,6 +3,7 @@ import type { Rule } from './rules/context.js';
 import { cronJobRule } from './rules/cronjob.js';
 import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
+import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
 import { jobRule } from './rules/job.js';
@@ -115,6 +116,10 @@ export const KINDS: Record<string, KindDescriptor> = {
   Ingress: {
     kind: 'Ingress',
     rules: [ingressRule],
+  },
+  HTTPRoute: {
+    kind: 'HTTPRoute',
+    rules: [httpRouteRule],
   },
   IngressClass: {
     kind: 'IngressClass',

@@ -500,4 +500,54 @@ spec:
     path: /export/build-cache
 `,
   },
+  {
+    id: 'httproute',
+    label: 'An HTTPRoute with problems',
+    blurb:
+      "A path containing \"/../\", a Service backend with no port, a backendRequest timeout longer than the request timeout, and a ReplacePrefixMatch rewrite on a rule with two matches instead of exactly one.",
+    yaml: `apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: checkout
+spec:
+  parentRefs:
+    - name: web-gateway
+  hostnames:
+    - checkout.example.com
+  rules:
+    - matches:
+        - path:
+            type: Exact
+            # A path is matched element by element after a split on "/", so a
+            # ".." element can never match a request path.
+            value: /checkout/../admin
+      backendRefs:
+        # group and kind default to a reference to a Service, which can expose
+        # more than one port — this backend does not say which.
+        - name: checkout-api
+      timeouts:
+        request: 2s
+        # backendRequest only bounds the part of the exchange spent waiting on
+        # the backend, so it can never be longer than the request timeout.
+        backendRequest: 5s
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api
+        - path:
+            type: PathPrefix
+            value: /api/v2
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              # ReplacePrefixMatch only knows how to rewrite the prefix a
+              # single PathPrefix match consumed — this rule has two.
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /internal
+      backendRefs:
+        - name: checkout-api
+          port: 8080
+`,
+  },
 ];
