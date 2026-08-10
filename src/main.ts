@@ -282,7 +282,7 @@ function initialState(): { yaml: string; version: string } {
   const hash = new URLSearchParams(window.location.hash.slice(1));
   const version = hash.get('version');
   return {
-    yaml: hash.get('yaml') ?? EXAMPLES[0]?.yaml ?? '',
+    yaml: hash.get('yaml') ?? '',
     version: version && isKnownVersion(version) ? version : DEFAULT_VERSION,
   };
 }
