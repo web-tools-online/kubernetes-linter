@@ -1,7 +1,7 @@
 {
  "k8sVersion": "1.25",
  "source": "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.25/api/openapi-spec/swagger.json",
- "generatedAt": "2026-08-10",
+ "generatedAt": "2026-08-11",
  "gatewayApiVersion": "v1.4.0",
  "roots": {
   "Pod": "io.k8s.api.core.v1.Pod",
@@ -15,6 +15,7 @@
   "IngressClass": "io.k8s.api.networking.v1.IngressClass",
   "PersistentVolume": "io.k8s.api.core.v1.PersistentVolume",
   "PersistentVolumeClaim": "io.k8s.api.core.v1.PersistentVolumeClaim",
+  "StorageClass": "io.k8s.api.storage.v1.StorageClass",
   "HTTPRoute": "io.k8s.sigs.gateway-api.apis.v1.HTTPRoute"
  },
  "definitions": {
@@ -4655,6 +4656,41 @@
    },
    "type": "object"
   },
+  "io.k8s.api.core.v1.TopologySelectorLabelRequirement": {
+   "description": "A topology selector requirement is a selector that matches given label. This is an alpha feature and may change in the future.",
+   "properties": {
+    "key": {
+     "description": "The label key that the selector applies to.",
+     "type": "string"
+    },
+    "values": {
+     "description": "An array of string values. One value must match the label to be selected. Each entry in Values is ORed.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   },
+   "required": [
+    "key",
+    "values"
+   ],
+   "type": "object"
+  },
+  "io.k8s.api.core.v1.TopologySelectorTerm": {
+   "description": "A topology selector term represents the result of label queries. A null or empty topology selector term matches no objects. The requirements of them are ANDed. It provides a subset of functionality as NodeSelectorTerm. This is an alpha feature and may change in the future.",
+   "properties": {
+    "matchLabelExpressions": {
+     "description": "A list of topology selector requirements by labels.",
+     "items": {
+      "$ref": "#/definitions/io.k8s.api.core.v1.TopologySelectorLabelRequirement"
+     },
+     "type": "array"
+    }
+   },
+   "type": "object",
+   "x-kubernetes-map-type": "atomic"
+  },
   "io.k8s.api.core.v1.TopologySpreadConstraint": {
    "description": "TopologySpreadConstraint specifies how to spread matching pods among the given topology.",
    "properties": {
@@ -5267,6 +5303,72 @@
     }
    },
    "type": "object"
+  },
+  "io.k8s.api.storage.v1.StorageClass": {
+   "description": "StorageClass describes the parameters for a class of storage for which PersistentVolumes can be dynamically provisioned.\n\nStorageClasses are non-namespaced; the name of the storage class according to etcd is in ObjectMeta.Name.",
+   "properties": {
+    "allowVolumeExpansion": {
+     "description": "AllowVolumeExpansion shows whether the storage class allow volume expand",
+     "type": "boolean"
+    },
+    "allowedTopologies": {
+     "description": "Restrict the node topologies where volumes can be dynamically provisioned. Each volume plugin defines its own supported topology specifications. An empty TopologySelectorTerm list means there is no topology restriction. This field is only honored by servers that enable the VolumeScheduling feature.",
+     "items": {
+      "$ref": "#/definitions/io.k8s.api.core.v1.TopologySelectorTerm"
+     },
+     "type": "array",
+     "x-kubernetes-list-type": "atomic"
+    },
+    "apiVersion": {
+     "description": "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+     "type": "string"
+    },
+    "kind": {
+     "description": "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+     "type": "string"
+    },
+    "metadata": {
+     "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta",
+     "description": "Standard object's metadata. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata"
+    },
+    "mountOptions": {
+     "description": "Dynamically provisioned PersistentVolumes of this storage class are created with these mountOptions, e.g. [\"ro\", \"soft\"]. Not validated - mount of the PVs will simply fail if one is invalid.",
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "parameters": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "description": "Parameters holds the parameters for the provisioner that should create volumes of this storage class.",
+     "type": "object"
+    },
+    "provisioner": {
+     "description": "Provisioner indicates the type of the provisioner.",
+     "type": "string"
+    },
+    "reclaimPolicy": {
+     "description": "Dynamically provisioned PersistentVolumes of this storage class are created with this reclaimPolicy. Defaults to Delete.",
+     "type": "string"
+    },
+    "volumeBindingMode": {
+     "description": "VolumeBindingMode indicates how PersistentVolumeClaims should be provisioned and bound.  When unset, VolumeBindingImmediate is used. This field is only honored by servers that enable the VolumeScheduling feature.",
+     "type": "string"
+    }
+   },
+   "required": [
+    "provisioner"
+   ],
+   "type": "object",
+   "x-kubernetes-group-version-kind": [
+    {
+     "group": "storage.k8s.io",
+     "kind": "StorageClass",
+     "version": "v1"
+    }
+   ]
   },
   "io.k8s.apimachinery.pkg.api.resource.Quantity": {
    "description": "Quantity is a fixed-point representation of a number. It provides convenient marshaling/unmarshaling in JSON and YAML, in addition to String() and AsInt64() accessors.\n\nThe serialization format is:\n\n``` <quantity>        ::= <signedNumber><suffix>\n\n\t(Note that <suffix> may be empty, from the \"\" case in <decimalSI>.)\n\n<digit>           ::= 0 | 1 | ... | 9 <digits>          ::= <digit> | <digit><digits> <number>          ::= <digits> | <digits>.<digits> | <digits>. | .<digits> <sign>            ::= \"+\" | \"-\" <signedNumber>    ::= <number> | <sign><number> <suffix>          ::= <binarySI> | <decimalExponent> | <decimalSI> <binarySI>        ::= Ki | Mi | Gi | Ti | Pi | Ei\n\n\t(International System of units; See: http://physics.nist.gov/cuu/Units/binary.html)\n\n<decimalSI>       ::= m | \"\" | k | M | G | T | P | E\n\n\t(Note that 1024 = 1Ki but 1000 = 1k; I didn't choose the capitalization.)\n\n<decimalExponent> ::= \"e\" <signedNumber> | \"E\" <signedNumber> ```\n\nNo matter which of the three exponent forms is used, no quantity may represent a number greater than 2^63-1 in magnitude, nor may it have more than 3 decimal places. Numbers larger or more precise will be capped or rounded up. (E.g.: 0.1m will rounded up to 1m.) This may be extended in the future if we require larger or smaller quantities.\n\nWhen a Quantity is parsed from a string, it will remember the type of suffix it had, and will use the same type again when it is serialized.\n\nBefore serializing, Quantity will be put in \"canonical form\". This means that Exponent/suffix will be adjusted up or down (with a corresponding increase or decrease in Mantissa) such that:\n\n- No precision is lost - No fractional digits will be emitted - The exponent (or suffix) is as large as possible.\n\nThe sign will be omitted unless the number is negative.\n\nExamples:\n\n- 1.5 will be serialized as \"1500m\" - 1.5Gi will be serialized as \"1536Mi\"\n\nNote that the quantity will NEVER be internally represented by a floating point number. That is the whole point of this exercise.\n\nNon-canonical values will still parse as long as they are well formed, but will be re-emitted in their canonical form. (So always use canonical form, or don't diff.)\n\nThis format is intended to make it difficult to use these numbers without writing some sort of special handling code in the hopes that that will cause implementors to also use a fixed point implementation.",

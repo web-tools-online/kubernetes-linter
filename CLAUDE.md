@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -117,8 +117,8 @@ reads: on a kind that lives outside namespaces (IngressClass, PersistentVolume) 
 reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
-a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim and an
-HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
+a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
+StorageClass and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
 (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -132,10 +132,13 @@ for a message. There are no `['spec', …]` literals left in the PodSpec rules; 
 silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
-`rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts` and `rules/httproute.ts`, which
+`rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts` and
+`rules/httproute.ts`, which
 address `spec.selector`, `spec.strategy`, `spec.updateStrategy`, `spec.completionMode`,
 `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`, `spec.accessModes`,
 `spec.capacity` and the like — fields of the object itself, not of any pod spec.
+`storageclass.ts` goes one step further and addresses `ctx.doc` directly: a StorageClass has no
+`spec` at all, so `provisioner` and the rest are document-root fields.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -145,7 +148,7 @@ is kind-correct for free.
 Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem wherever it lives —
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
-`httproute/*` for checks on the object itself. The two document-level rules are named for what they check rather than for a
+`storageclass/*` / `httproute/*` for checks on the object itself. The two document-level rules are named for what they check rather than for a
 kind, since they run for every kind including one with no Pod: `meta/*` in `metadata.ts` and
 `enum/*` in `enums.ts`. `Schema` is per version and holds every root; `Schema.for(kind)`
 returns the `KindSchema` view that both lint layers actually use.
@@ -282,6 +285,29 @@ wholesale by definitions the bundle already carries rather than flattened on the
 `ObjectMeta`, and `status.parents[].conditions[]` — field for field the same as a Service's own
 status conditions — becomes a `$ref` to meta/v1 `Condition`.
 
+`storageclass.ts` is the seventh, and the structural odd one out: a StorageClass has **no
+`spec`**. `provisioner`, `parameters`, `reclaimPolicy`, `mountOptions`, `allowVolumeExpansion`,
+`volumeBindingMode` and `allowedTopologies` are all fields of the document root, so the module
+reads `ctx.doc` where every other kind's module opens with the
+`const declared = ctx.doc['spec']` idiom — and its two `enums.ts` entries are keyed
+`StorageClass.reclaimPolicy` / `StorageClass.volumeBindingMode`, the only entries in that table
+owned by a root definition rather than a `*Spec`. `reclaimPolicy` is also the one place two
+kinds disagree on a vocabulary: a PersistentVolume may say `Recycle`, a StorageClass may not.
+Layer 1 covers more here than it does for an IngressClass — `provisioner` is in the schema's
+`required` list, as are a topology expression's `key` and `values` — so the module is left with
+the qualified-name format of the provisioner (lowercased first, the same apiserver quirk
+`persistentvolume.ts` documents for `csi.driver`, and `IsQualifiedName` rather than a DNS
+subdomain, which is what lets `kubernetes.io/aws-ebs` through), the parameters map's empty key
+and size caps, and the several ways one `allowedTopologies` entry can contradict itself or its
+neighbour. The trap worth knowing: `validateVolumeBindingMode` errors on a nil mode, but
+`SetDefaults_StorageClass` fills in `Immediate` before validation runs — so an **absent**
+`volumeBindingMode` is not reported, the exact inverse of the Job `restartPolicy` case where
+the default is itself invalid. Deliberately skipped: `mountOptions` (not validated server-side,
+as on a PersistentVolume), `allowVolumeExpansion` (a bare bool), and the immutability of
+`provisioner`/`parameters`/`reclaimPolicy`/`volumeBindingMode`, which only constrains an update.
+Nothing is version-gated: storage/v1 StorageClass predates the 1.25 floor and has not changed
+since.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
 markers, unlike the hand-written Kubernetes API types the other eleven kinds come from, where
@@ -331,8 +357,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(217 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 239 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(220 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 242 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -350,7 +376,9 @@ below its spec is already pulled in by StatefulSet's `volumeClaimTemplates`, so 
 PersistentVolume is the one root that is *not* nearly free: it shares its metadata and
 access-mode types with the claim, but its spec carries the *PersistentVolumeSource* variant of
 every in-tree volume plugin — types a Pod's inline `VolumeSource` closure never reaches — which
-widens the bundle by about 16 definitions on every version. API descriptions are kept on
+widens the bundle by about 16 definitions on every version. StorageClass is back to cheap, and
+is the only root outside core/v1, apps/v1, batch/v1 and networking/v1: below its own definition
+it reaches `TopologySelectorTerm` and `TopologySelectorLabelRequirement` and nothing else. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -368,7 +396,8 @@ them property-by-property would produce nonsense.
 - Rule IDs are `pod/<thing>` for PodSpec checks and `deployment/<thing>` / `statefulset/<thing>`
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
-  `persistentvolumeclaim/<thing>` / `httproute/<thing>` for checks on the object itself; the
+  `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `httproute/<thing>` for checks on
+  the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its

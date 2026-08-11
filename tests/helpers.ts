@@ -507,3 +507,35 @@ spec:
 export function persistentVolume(specFragment: string, metadataFragment = '  name: archive\n'): string {
   return `apiVersion: v1\nkind: PersistentVolume\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
 }
+
+/** A minimal valid StorageClass that individual tests mutate. */
+export const VALID_STORAGE_CLASS = `apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast
+provisioner: ebs.csi.aws.com
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+parameters:
+  type: gp3
+`;
+
+/**
+ * Build a StorageClass from a fragment of its top-level fields. Unlike every
+ * other builder here the fragment is not a spec: a StorageClass has none, so
+ * provisioner and the rest sit directly under the document. Fragments are
+ * therefore indented zero spaces rather than the two `pod()` uses, and like an
+ * IngressClass this kind is cluster-scoped, so the metadata fragment carries no
+ * namespace.
+ */
+export function storageClass(
+  fieldsFragment: string,
+  metadataFragment = '  name: fast\n',
+): string {
+  return `apiVersion: storage.k8s.io/v1\nkind: StorageClass\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/** A StorageClass with a valid provisioner carrying the given extra fields. */
+export function storageClassWith(fieldsFragment: string): string {
+  return storageClass(`provisioner: ebs.csi.aws.com\n${fieldsFragment}`);
+}

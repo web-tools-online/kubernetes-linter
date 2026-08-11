@@ -11,6 +11,7 @@ import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
 import { serviceRule } from './rules/service.js';
 import { statefulSetRule } from './rules/statefulset.js';
+import { storageClassRule } from './rules/storageclass.js';
 
 /**
  * Where a kind keeps the Pod it describes. This is the only thing that moves
@@ -134,5 +135,10 @@ export const KINDS: Record<string, KindDescriptor> = {
   PersistentVolumeClaim: {
     kind: 'PersistentVolumeClaim',
     rules: [persistentVolumeClaimRule],
+  },
+  StorageClass: {
+    kind: 'StorageClass',
+    clusterScoped: true,
+    rules: [storageClassRule],
   },
 };
