@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim and HTTPRoute',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass and HTTPRoute',
       );
     });
 
@@ -311,6 +311,15 @@ describe('field descriptions', () => {
     expect(persistentVolume.describe(['spec', 'containers'])).toBeUndefined();
   });
 
+  it('resolves a StorageClass field, which hangs off the root and not off a spec', () => {
+    const storageClass = schema.for('StorageClass')!;
+    expect(
+      storageClass.describe(['allowedTopologies', 0, 'matchLabelExpressions', 0, 'key'])?.type,
+    ).toBe('string');
+    expect(storageClass.describe(['provisioner'])?.type).toBe('string');
+    expect(storageClass.describe(['spec'])).toBeUndefined();
+  });
+
   it('resolves a Job field, which no other root reaches', () => {
     const job = schema.for('Job')!;
     expect(job.describe(['spec', 'podFailurePolicy', 'rules', 0, 'action'])?.type).toBe('string');
@@ -354,6 +363,7 @@ describe('field descriptions', () => {
       'IngressClass',
       'PersistentVolume',
       'PersistentVolumeClaim',
+      'StorageClass',
       'HTTPRoute',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();

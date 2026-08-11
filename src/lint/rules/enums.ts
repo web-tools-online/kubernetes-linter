@@ -83,6 +83,16 @@ const ENUMS: Record<string, EnumSpec> = {
     values: ['Retain', 'Recycle', 'Delete'],
     note: 'Defaults to Retain for a manually created volume, Delete for one provisioned dynamically. Recycle is deprecated.',
   },
+  // The two StorageClass fields are the only enum entries owned by a root
+  // definition rather than a spec: a StorageClass has no spec to hang them off.
+  'StorageClass.reclaimPolicy': {
+    values: ['Delete', 'Retain'],
+    note: 'Defaults to Delete. Narrower than a PersistentVolume\'s own persistentVolumeReclaimPolicy, which also accepts the deprecated "Recycle" — a StorageClass may not.',
+  },
+  'StorageClass.volumeBindingMode': {
+    values: ['Immediate', 'WaitForFirstConsumer'],
+    note: 'Defaults to Immediate, which binds a claim as soon as it is created. WaitForFirstConsumer defers binding until a Pod using the claim is scheduled, so the volume lands where that Pod does.',
+  },
   'HostPathVolumeSource.type': {
     values: [
       'DirectoryOrCreate', 'Directory', 'FileOrCreate', 'File', 'Socket', 'CharDevice',

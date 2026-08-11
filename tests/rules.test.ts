@@ -11,6 +11,7 @@ import {
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
   VALID_STATEFULSET,
+  VALID_STORAGE_CLASS,
   cronJob,
   cronJobWithPodSpec,
   daemonSet,
@@ -37,6 +38,8 @@ import {
   service,
   statefulSet,
   statefulSetWithPodSpec,
+  storageClass,
+  storageClassWith,
 } from './helpers.js';
 
 describe('metadata', () => {
@@ -3859,6 +3862,285 @@ describe('httproute', () => {
           '      backendRefs:\n        - name: web\n          port: 80\n',
       );
       expectNoRule(yaml, 'httproute/path-value');
+    });
+  });
+});
+
+describe('storageclass', () => {
+  const topologies = (fragment: string) => storageClassWith(`allowedTopologies:\n${fragment}`);
+
+  it('accepts a valid StorageClass', () => {
+    expectRules(VALID_STORAGE_CLASS, []);
+  });
+
+  it('accepts a class that only groups statically provisioned volumes', () => {
+    expectRules(storageClass('provisioner: kubernetes.io/no-provisioner\n'), []);
+  });
+
+  describe('provisioner', () => {
+    it('leaves a missing provisioner to the schema layer', () => {
+      const yaml = storageClass('reclaimPolicy: Delete\n');
+      expectRule(yaml, 'schema/required-field');
+      expectNoRule(yaml, 'storageclass/missing-provisioner');
+    });
+
+    it('reports an empty provisioner itself', () => {
+      const finding = expectRule(
+        storageClass("provisioner: ''\n"),
+        'storageclass/missing-provisioner',
+      );
+      expect(finding.path).toEqual(['provisioner']);
+    });
+
+    it('accepts a domain-prefixed in-tree provisioner', () => {
+      expectRules(storageClass('provisioner: kubernetes.io/aws-ebs\n'), []);
+    });
+
+    it('accepts an upper-case provisioner, which the apiserver lowercases first', () => {
+      expectRules(storageClass('provisioner: EBS.csi.aws.com\n'), []);
+    });
+
+    it('rejects a provisioner with more than one slash', () => {
+      const finding = expectRule(
+        storageClass('provisioner: kubernetes.io/aws/ebs\n'),
+        'storageclass/invalid-provisioner',
+      );
+      expect(finding.path).toEqual(['provisioner']);
+      expect(finding.message).toContain('must not contain more than one "/"');
+    });
+
+    it('rejects a provisioner whose name part carries a space, and offers a fix', () => {
+      const finding = expectRule(
+        storageClass('provisioner: ebs csi driver\n'),
+        'storageclass/invalid-provisioner',
+      );
+      expect(finding.fix?.safe).toBe(false);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['provisioner'], value: 'ebs-csi-driver' },
+      ]);
+    });
+
+    it('rejects a provisioner with an invalid domain prefix', () => {
+      const finding = expectRule(
+        storageClass('provisioner: Kubernetes_io/aws-ebs\n'),
+        'storageclass/invalid-provisioner',
+      );
+      expect(finding.message).toContain('prefix part');
+    });
+  });
+
+  describe('parameters', () => {
+    it('accepts an empty parameters map', () => {
+      expectRules(storageClassWith('parameters: {}\n'), []);
+    });
+
+    it('rejects an empty key', () => {
+      const finding = expectRule(
+        storageClassWith("parameters:\n  '': gp3\n"),
+        'storageclass/empty-parameter-key',
+      );
+      expect(finding.path).toEqual(['parameters']);
+    });
+
+    it('rejects more than 512 entries', () => {
+      const entries = Array.from({ length: 513 }, (_, i) => `  key${i}: value\n`).join('');
+      const finding = expectRule(
+        storageClassWith(`parameters:\n${entries}`),
+        'storageclass/too-many-parameters',
+      );
+      expect(finding.message).toContain('513');
+    });
+
+    it('rejects a map totalling more than 256 KiB', () => {
+      const value = 'x'.repeat(60_000);
+      const entries = Array.from({ length: 5 }, (_, i) => `  key${i}: ${value}\n`).join('');
+      expectRule(storageClassWith(`parameters:\n${entries}`), 'storageclass/parameters-too-large');
+    });
+  });
+
+  describe('reclaimPolicy and volumeBindingMode', () => {
+    it('leaves both enums to the enum rule', () => {
+      const finding = expectRule(
+        storageClassWith('reclaimPolicy: delete\n'),
+        'enum/invalid-value',
+      );
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['reclaimPolicy'], value: 'Delete' },
+      ]);
+    });
+
+    it('rejects Recycle, which only a PersistentVolume may say', () => {
+      expectRule(storageClassWith('reclaimPolicy: Recycle\n'), 'enum/invalid-value');
+    });
+
+    it('reports nothing for an absent volumeBindingMode, which defaults', () => {
+      expectRules(storageClass('provisioner: ebs.csi.aws.com\n'), []);
+    });
+
+    it('suggests the right binding mode for a near miss', () => {
+      const finding = expectRule(
+        storageClassWith('volumeBindingMode: WaitForFirstConsumers\n'),
+        'enum/invalid-value',
+      );
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['volumeBindingMode'], value: 'WaitForFirstConsumer' },
+      ]);
+    });
+  });
+
+  describe('allowedTopologies', () => {
+    const zone = (values: string[], key = 'topology.kubernetes.io/zone') =>
+      `  - matchLabelExpressions:\n      - key: ${key}\n        values:\n${values
+        .map((value) => `          - ${value}\n`)
+        .join('')}`;
+
+    it('accepts a term restricting one label to two zones', () => {
+      expectRules(topologies(zone(['us-east-1a', 'us-east-1b'])), []);
+    });
+
+    it('leaves a missing key to the schema layer', () => {
+      const yaml = topologies(
+        '  - matchLabelExpressions:\n      - values:\n          - us-east-1a\n',
+      );
+      expectRule(yaml, 'schema/required-field');
+      expectNoRule(yaml, 'storageclass/invalid-topology-key');
+    });
+
+    it('rejects an empty values list', () => {
+      const finding = expectRule(
+        topologies(
+          '  - matchLabelExpressions:\n      - key: topology.kubernetes.io/zone\n        values: []\n',
+        ),
+        'storageclass/empty-topology-values',
+      );
+      expect(finding.path).toEqual([
+        'allowedTopologies',
+        0,
+        'matchLabelExpressions',
+        0,
+        'values',
+      ]);
+    });
+
+    it('rejects a repeated value, and offers to remove it', () => {
+      const finding = expectRule(
+        topologies(zone(['us-east-1a', 'us-east-1a'])),
+        'storageclass/duplicate-topology-value',
+      );
+      expect(finding.path).toEqual([
+        'allowedTopologies',
+        0,
+        'matchLabelExpressions',
+        0,
+        'values',
+        1,
+      ]);
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'delete', path: ['allowedTopologies', 0, 'matchLabelExpressions', 0, 'values', 1] },
+      ]);
+    });
+
+    it('rejects an invalid topology key', () => {
+      const finding = expectRule(
+        topologies(zone(['us-east-1a'], 'topology kubernetes io/zone')),
+        'storageclass/invalid-topology-key',
+      );
+      expect(finding.path).toEqual(['allowedTopologies', 0, 'matchLabelExpressions', 0, 'key']);
+    });
+
+    it('rejects the same key twice in one term', () => {
+      const yaml = topologies(
+        '  - matchLabelExpressions:\n' +
+          '      - key: topology.kubernetes.io/zone\n        values:\n          - us-east-1a\n' +
+          '      - key: topology.kubernetes.io/zone\n        values:\n          - us-east-1b\n',
+      );
+      const finding = expectRule(yaml, 'storageclass/duplicate-topology-key');
+      expect(finding.path).toEqual(['allowedTopologies', 0, 'matchLabelExpressions', 1, 'key']);
+    });
+
+    it('accepts the same key in two different terms', () => {
+      expectRules(topologies(zone(['us-east-1a']) + zone(['us-east-1b'])), []);
+    });
+
+    it('rejects two terms requiring exactly the same thing', () => {
+      const finding = expectRule(
+        topologies(zone(['us-east-1a']) + zone(['us-east-1a'])),
+        'storageclass/duplicate-topology-term',
+      );
+      expect(finding.path).toEqual(['allowedTopologies', 1, 'matchLabelExpressions']);
+    });
+
+    it('sees through the order values and expressions were written in', () => {
+      const yaml = topologies(
+        '  - matchLabelExpressions:\n' +
+          '      - key: topology.kubernetes.io/zone\n        values:\n          - a\n          - b\n' +
+          '      - key: topology.kubernetes.io/region\n        values:\n          - us-east-1\n' +
+          '  - matchLabelExpressions:\n' +
+          '      - key: topology.kubernetes.io/region\n        values:\n          - us-east-1\n' +
+          '      - key: topology.kubernetes.io/zone\n        values:\n          - b\n          - a\n',
+      );
+      expectRule(yaml, 'storageclass/duplicate-topology-term');
+    });
+  });
+
+  describe('default class annotation', () => {
+    const annotated = (value: string, annotation = 'storageclass.kubernetes.io/is-default-class') =>
+      storageClass(
+        'provisioner: ebs.csi.aws.com\n',
+        `  name: fast\n  annotations:\n    ${annotation}: ${value}\n`,
+      );
+
+    it('accepts the exact strings', () => {
+      expectRules(annotated('"true"'), []);
+      expectRules(annotated('"false"'), []);
+    });
+
+    it('reports a capitalised value, and offers to correct it', () => {
+      const finding = expectRule(annotated('"True"'), 'storageclass/invalid-default-annotation');
+      expect(finding.severity).toBe('warning');
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([
+        {
+          op: 'set',
+          path: ['metadata', 'annotations', 'storageclass.kubernetes.io/is-default-class'],
+          value: 'true',
+        },
+      ]);
+    });
+
+    it('reports a value that is not a near miss, with no fix', () => {
+      const finding = expectRule(annotated('"yes"'), 'storageclass/invalid-default-annotation');
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('checks the beta annotation the admission plugin still honours', () => {
+      const finding = expectRule(
+        annotated('"True"', 'storageclass.beta.kubernetes.io/is-default-class'),
+        'storageclass/invalid-default-annotation',
+      );
+      expect(finding.path).toEqual([
+        'metadata',
+        'annotations',
+        'storageclass.beta.kubernetes.io/is-default-class',
+      ]);
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a namespace, since the kind is cluster-scoped', () => {
+      const yaml = storageClass(
+        'provisioner: ebs.csi.aws.com\n',
+        '  name: fast\n  namespace: storage\n',
+      );
+      expectRule(yaml, 'meta/namespace-not-allowed');
+    });
+
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(
+        storageClass('provisioner: ebs.csi.aws.com\n', '  name: Fast_Class\n'),
+        'meta/invalid-name',
+      );
     });
   });
 });

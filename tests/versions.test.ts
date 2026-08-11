@@ -19,6 +19,7 @@ import {
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
   VALID_STATEFULSET,
+  VALID_STORAGE_CLASS,
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
@@ -35,6 +36,7 @@ import {
   service,
   statefulSet,
   statefulSetWithPodSpec,
+  storageClassWith,
 } from './helpers.js';
 
 const schemaFor = (version: string) => loadSchema(version);
@@ -92,6 +94,7 @@ describe('bundled versions', () => {
         'IngressClass',
         'PersistentVolume',
         'PersistentVolumeClaim',
+        'StorageClass',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -106,6 +109,7 @@ describe('bundled versions', () => {
       expect(schema.for('PersistentVolume')?.apiVersion, version).toBe('v1');
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
+      expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
   });
 
@@ -203,6 +207,17 @@ describe('bundled versions', () => {
     }
   });
 
+  it('lints a valid StorageClass cleanly on every version', async () => {
+    // The twelfth root, and the only one outside core/v1, apps/v1, batch/v1
+    // and networking/v1. Below its own definition it reaches the two
+    // TopologySelector types and nothing else, so a regeneration that dropped
+    // them would be invisible everywhere but here.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_STORAGE_CLASS, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
   it('lints a valid HTTPRoute cleanly on every version', async () => {
     // The twelfth root, and the first one sourced from a CRD rather than the
     // k8s swagger — HTTPRoute's definitions are the same on every k8s
@@ -224,6 +239,27 @@ describe('bundled versions', () => {
     );
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['httproute/redirect-with-backend-refs']);
+    }
+  });
+
+  it('checks a StorageClass the same way on every version', async () => {
+    // storage/v1 StorageClass predates the 1.25 floor and has not changed
+    // since — allowedTopologies and volumeBindingMode included — so nothing in
+    // its rule module is version-gated.
+    const yaml = storageClassWith(
+      'allowedTopologies:\n' +
+        '  - matchLabelExpressions:\n' +
+        '      - key: topology.kubernetes.io/zone\n' +
+        '        values:\n' +
+        '          - us-east-1a\n' +
+        '      - key: topology.kubernetes.io/zone\n' +
+        '        values:\n' +
+        '          - us-east-1b\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'storageclass/duplicate-topology-key',
+      ]);
     }
   });
 

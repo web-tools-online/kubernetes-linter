@@ -550,4 +550,41 @@ spec:
           port: 8080
 `,
   },
+  {
+    id: 'storageclass',
+    label: 'A StorageClass with problems',
+    blurb:
+      'A default-class annotation that is quietly not "true", a namespace on a cluster-scoped object, a provisioner with a space in it, a reclaim policy a PersistentVolume may say but a class may not, and one topology term requiring the same label twice.',
+    yaml: `apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: fast-ssd
+  annotations:
+    # The admission plugin compares this to "true" character by character, so
+    # "True" leaves the cluster with no default class at all.
+    storageclass.kubernetes.io/is-default-class: "True"
+  # StorageClass is cluster-scoped, so a namespace is not allowed on it.
+  namespace: storage
+# A provisioner is a qualified name, so it cannot carry a space.
+provisioner: ebs csi driver
+# A StorageClass may only say Delete or Retain — Recycle is a PersistentVolume's
+# to say, and even there it is deprecated.
+reclaimPolicy: Recycle
+# Binding mode values are case-sensitive.
+volumeBindingMode: waitForFirstConsumer
+parameters:
+  type: gp3
+allowedTopologies:
+  - matchLabelExpressions:
+      # The requirements in one term are combined with AND, so a second one on
+      # the same label can only narrow or contradict the first. One requirement
+      # listing both zones is what was meant.
+      - key: topology.kubernetes.io/zone
+        values:
+          - us-east-1a
+      - key: topology.kubernetes.io/zone
+        values:
+          - us-east-1b
+`,
+  },
 ];
