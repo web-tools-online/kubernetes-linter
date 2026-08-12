@@ -7,6 +7,7 @@ import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
 import { jobRule } from './rules/job.js';
+import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
 import { serviceRule } from './rules/service.js';
@@ -140,5 +141,9 @@ export const KINDS: Record<string, KindDescriptor> = {
     kind: 'StorageClass',
     clusterScoped: true,
     rules: [storageClassRule],
+  },
+  NetworkPolicy: {
+    kind: 'NetworkPolicy',
+    rules: [networkPolicyRule],
   },
 };

@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass and HTTPRoute',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy and HTTPRoute',
       );
     });
 
@@ -326,6 +326,14 @@ describe('field descriptions', () => {
     expect(job.describe(['spec', 'strategy'])).toBeUndefined();
   });
 
+  it('resolves a NetworkPolicy field, which no other root reaches', () => {
+    const networkPolicy = schema.for('NetworkPolicy')!;
+    expect(
+      networkPolicy.describe(['spec', 'ingress', 0, 'from', 0, 'ipBlock', 'cidr'])?.type,
+    ).toBe('string');
+    expect(networkPolicy.describe(['spec', 'rules'])).toBeUndefined();
+  });
+
   it('resolves an HTTPRoute field, sourced from a CRD rather than the k8s swagger', () => {
     const httpRoute = schema.for('HTTPRoute')!;
     expect(httpRoute.describe(['spec', 'rules', 0, 'matches', 0, 'path', 'type'])?.type).toBe('string');
@@ -364,6 +372,7 @@ describe('field descriptions', () => {
       'PersistentVolume',
       'PersistentVolumeClaim',
       'StorageClass',
+      'NetworkPolicy',
       'HTTPRoute',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();

@@ -15,6 +15,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
@@ -29,6 +30,7 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  networkPolicy,
   persistentVolume,
   persistentVolumeClaim,
   pod,
@@ -95,6 +97,7 @@ describe('bundled versions', () => {
         'PersistentVolume',
         'PersistentVolumeClaim',
         'StorageClass',
+        'NetworkPolicy',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -108,6 +111,7 @@ describe('bundled versions', () => {
       expect(schema.for('IngressClass')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('PersistentVolume')?.apiVersion, version).toBe('v1');
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
+      expect(schema.for('NetworkPolicy')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -215,6 +219,28 @@ describe('bundled versions', () => {
     for (const version of AVAILABLE_VERSIONS) {
       const { findings } = lint(VALID_STORAGE_CLASS, await schemaFor(version));
       expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('lints a valid NetworkPolicy cleanly on every version', async () => {
+    // The thirteenth root. podSelector is spelled out as {} rather than left
+    // off, so this manifest lints clean even on the 1.25-1.33 bundles whose
+    // generated NetworkPolicySpec still lists it as required — see "carries
+    // NetworkPolicySpec.required inconsistently" below for that divergence.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_NETWORKPOLICY, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a NetworkPolicy the same way on every version', async () => {
+    // Every field this rule module reads, endPort included, predates the
+    // 1.25 floor, so nothing in it is version-gated.
+    const yaml = networkPolicy(
+      '  podSelector: {}\n  ingress:\n    - ports:\n        - port: 8080\n          endPort: 80\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['networkpolicy/endport-before-port']);
     }
   });
 
@@ -459,6 +485,22 @@ describe('PersistentVolumeClaim fields that came and went', () => {
     expect(await ruleIdsAt('1.29', yaml)).toContain(
       'persistentvolumeclaim/invalid-volume-attributes-class-name',
     );
+  });
+});
+
+describe('NetworkPolicy carries NetworkPolicySpec.required inconsistently', () => {
+  // Upstream's own generated OpenAPI document lists podSelector as required on
+  // NetworkPolicySpec through 1.33 and stops in 1.34, even though the
+  // apiserver has never actually rejected an absent one — the zero-value
+  // LabelSelector is valid and means "every Pod in the namespace". The bundle
+  // keeps upstream's definitions verbatim rather than patching around the
+  // drift, so this is upstream's inconsistency to pin, not a rule of this
+  // linter's.
+  it('requires podSelector through 1.33 and stops in 1.34', async () => {
+    const yaml = networkPolicy('  policyTypes:\n    - Ingress\n');
+
+    expect(await ruleIdsAt('1.33', yaml)).toEqual(['schema/required-field']);
+    expect(await ruleIdsAt('1.34', yaml)).toEqual([]);
   });
 });
 
