@@ -539,3 +539,35 @@ export function storageClass(
 export function storageClassWith(fieldsFragment: string): string {
   return storageClass(`provisioner: ebs.csi.aws.com\n${fieldsFragment}`);
 }
+
+/**
+ * A minimal valid NetworkPolicy. podSelector is spelled out as `{}` rather
+ * than left off, since an empty selector — "every Pod in this namespace" — is
+ * the idiomatic value here, unlike the empty-selector rejection on a
+ * Deployment's spec.selector.
+ */
+export const VALID_NETWORKPOLICY = `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+`;
+
+/**
+ * Build a NetworkPolicy from a fragment of NetworkPolicySpec. Like
+ * `persistentVolumeClaim()` the fragment is the whole spec: a NetworkPolicy
+ * has no pod template to keep consistent. Fragments are indented two spaces,
+ * matching `pod()`.
+ */
+export function networkPolicy(specFragment: string, metadataFragment = '  name: web\n'): string {
+  return `apiVersion: networking.k8s.io/v1\nkind: NetworkPolicy\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}
+
+/** A NetworkPolicy with one ingress rule carrying the given peer fragment. */
+export function networkPolicyWithPeer(peerFragment: string): string {
+  return networkPolicy(`  podSelector: {}\n  ingress:\n    - from:\n${peerFragment}`);
+}

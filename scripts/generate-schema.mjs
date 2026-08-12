@@ -67,6 +67,7 @@ const ROOTS = {
   PersistentVolume: 'io.k8s.api.core.v1.PersistentVolume',
   PersistentVolumeClaim: 'io.k8s.api.core.v1.PersistentVolumeClaim',
   StorageClass: 'io.k8s.api.storage.v1.StorageClass',
+  NetworkPolicy: 'io.k8s.api.networking.v1.NetworkPolicy',
 };
 
 /**

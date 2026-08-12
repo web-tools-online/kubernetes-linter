@@ -185,6 +185,12 @@ const ENUMS: Record<string, EnumSpec> = {
     note: 'Defaults to Cluster. "Namespace" requires parameters.namespace beside it; "Cluster" forbids it.',
   },
 
+  // policyTypes is a list of enum strings rather than a scalar field, so it
+  // is not in this table at all — walkFields visits the array as a whole and
+  // enumRule only compares scalar values. rules/networkpolicy.ts checks it
+  // directly, the same way persistentvolumeclaim.ts checks accessModes.
+  'NetworkPolicyPort.protocol': { values: ['TCP', 'UDP', 'SCTP'], note: 'Defaults to TCP.' },
+
   'StatefulSetSpec.podManagementPolicy': {
     values: ['OrderedReady', 'Parallel'],
     note: 'Defaults to OrderedReady, which starts and replaces Pods one at a time, in ordinal order.',

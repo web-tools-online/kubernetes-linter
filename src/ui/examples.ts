@@ -587,4 +587,49 @@ allowedTopologies:
           - us-east-1b
 `,
   },
+  {
+    id: 'networkpolicy',
+    label: 'A NetworkPolicy with problems',
+    blurb:
+      'An ipBlock combined with a namespaceSelector on the same peer, an except entry that falls outside its own cidr, a cidr with bits set beyond its prefix, an endPort below its port, and an egress block that policyTypes never turns on.',
+    yaml: `apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: web-policy
+  namespace: shop
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # ipBlock selects by raw address rather than by label, so it cannot be
+        # combined with a selector — the apiserver rejects the pair rather
+        # than guess which one is meant.
+        - namespaceSelector:
+            matchLabels:
+              team: payments
+          ipBlock:
+            # 10.1.1.5/24's own network is 10.1.1.0/24; the ".5" is ignored by
+            # the CNI, so writing it invites the reader to think it matters.
+            cidr: 10.1.1.5/24
+            except:
+              # 10.2.0.0/24 lies outside 10.1.1.0/24 entirely, so it excludes
+              # nothing.
+              - 10.2.0.0/24
+      ports:
+        - protocol: TCP
+          port: 8443
+          # A range's end can't sit below where it starts.
+          endPort: 8080
+  # policyTypes only lists "Ingress", so this block is stored but never
+  # enforced.
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+`,
+  },
 ];

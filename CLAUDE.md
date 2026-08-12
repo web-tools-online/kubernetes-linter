@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -308,14 +308,46 @@ as on a PersistentVolume), `allowVolumeExpansion` (a bare bool), and the immutab
 Nothing is version-gated: storage/v1 StorageClass predates the 1.25 floor and has not changed
 since.
 
+`networkpolicy.ts` is the eighth, and unlike every one before it almost everything it addresses
+is either a `LabelSelector` or a CIDR block rather than a field of its own: `spec.podSelector`
+and each peer's `podSelector`/`namespaceSelector` all go through `selector.ts`'s
+`checkRequirement`, the same helper `persistentvolumeclaim.ts`'s own selector uses, and each
+`ipBlock` goes through two functions added to `k8s/net.ts` for this kind — `cidrContains`,
+mirroring Go's `net.IPNet.Contains`, and `maskCIDR`, its canonical network form — since nothing
+before it needed to ask whether one CIDR block sits inside another. `podSelector` is also the
+one place this kind inverts a convention the three controller kinds share: an **empty**
+selector is not a mistake here, it means "every Pod in this namespace", the opposite of the
+empty-selector rejection `deployment.ts`/`statefulset.ts`/`daemonset.ts` each report, so this
+module never runs that check at all. Layer 1 covers `podSelector` and `ipBlock.cidr` being
+required; the module is left with what OpenAPI cannot express — a peer naming none of
+`podSelector`, `namespaceSelector` or `ipBlock`, or combining `ipBlock` with either selector, an
+`except` entry that is not a strict subset of its `cidr`, and a `port`/`endPort` pair that
+disagree, plus two checks that are not apiserver rejections at all and so are reported as
+warnings rather than errors: a `cidr` with bits set beyond its prefix length (inert today, and
+from 1.36 a hard rejection under the `StrictIPCIDRValidation` feature gate, named in the
+explanation the way the sidecar case names 1.28) and an `ingress`/`egress` rule list that
+`policyTypes` does not cover, which the apiserver stores but never enforces. `policyTypes`
+itself is a list of enum strings rather than a scalar field, so — like `PersistentVolumeClaim`'s
+`accessModes` — it cannot go in the `enums.ts` table at all (`walkFields` hands `enumRule` the
+whole array, which only ever compares a scalar value) and is checked in the module instead, with
+`didYouMean` and a safe fix exactly as `accessModes` gets one. `NetworkPolicyPort.protocol` is
+a plain scalar enum and does live in the table. One further wrinkle is not this module's to
+paper over: upstream's own generated OpenAPI document lists `podSelector` as required on
+`NetworkPolicySpec` through 1.33 and stops in 1.34, even though the apiserver has never actually
+rejected an absent one — the bundle keeps that verbatim rather than patching around it, so an
+absent `podSelector` is `schema/required-field` on the older releases and nothing on the newer
+ones, pinned as upstream's own drift in `tests/versions.test.ts` rather than treated as a bug
+here. Nothing in the module itself is version-gated: every field it checks, `endPort` included,
+has been part of networking/v1 NetworkPolicy since before the 1.25 floor.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
-markers, unlike the hand-written Kubernetes API types the other eleven kinds come from, where
+markers, unlike the hand-written Kubernetes API types the other twelve kinds come from, where
 `rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
 Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
 gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
 `schema/out-of-range`, `schema/list-size`), purely additively — no k8s bundle definition sets
-any of them, so the other eleven kinds are unaffected. That leaves `httproute.ts` with only
+any of them, so the other twelve kinds are unaffected. That leaves `httproute.ts` with only
 what the CRD's schema cannot express at all: its `x-kubernetes-validations` (CEL) rules, which
 `generate-schema.mjs` strips during flattening since layer 1 cannot evaluate CEL, and which are
 reimplemented by hand instead — filter `type` agreeing with its populated field, `parentRefs`
@@ -357,8 +389,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(220 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 242 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(227 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 249 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -378,7 +410,13 @@ access-mode types with the claim, but its spec carries the *PersistentVolumeSour
 every in-tree volume plugin — types a Pod's inline `VolumeSource` closure never reaches — which
 widens the bundle by about 16 definitions on every version. StorageClass is back to cheap, and
 is the only root outside core/v1, apps/v1, batch/v1 and networking/v1: below its own definition
-it reaches `TopologySelectorTerm` and `TopologySelectorLabelRequirement` and nothing else. API descriptions are kept on
+it reaches `TopologySelectorTerm` and `TopologySelectorLabelRequirement` and nothing else.
+NetworkPolicy is cheap too, and the reason is the same as CronJob's: it shares `LabelSelector`,
+`LabelSelectorRequirement`, `IntOrString` and `ObjectMeta` with roots already in the closure, so
+it adds only its own seven definitions — `NetworkPolicy`, `NetworkPolicySpec`,
+`NetworkPolicyIngressRule`, `NetworkPolicyEgressRule`, `NetworkPolicyPeer`, `NetworkPolicyPort`
+and `IPBlock` — an eighth, `NetworkPolicyStatus`, on the 1.25-1.27 bundles only, since upstream
+dropped the field from the type in 1.28. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -396,7 +434,8 @@ them property-by-property would produce nonsense.
 - Rule IDs are `pod/<thing>` for PodSpec checks and `deployment/<thing>` / `statefulset/<thing>`
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
-  `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `httproute/<thing>` for checks on
+  `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
+  `httproute/<thing>` for checks on
   the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.

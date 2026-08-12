@@ -7,6 +7,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_SERVICE,
@@ -30,6 +31,8 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  networkPolicy,
+  networkPolicyWithPeer,
   persistentVolume,
   persistentVolumeClaim,
   pod,
@@ -4140,6 +4143,254 @@ describe('storageclass', () => {
       expectRule(
         storageClass('provisioner: ebs.csi.aws.com\n', '  name: Fast_Class\n'),
         'meta/invalid-name',
+      );
+    });
+  });
+});
+
+describe('networkpolicy', () => {
+  it('accepts a valid NetworkPolicy', () => {
+    expectRules(VALID_NETWORKPOLICY, []);
+  });
+
+  it('accepts an empty podSelector, which selects every Pod in the namespace', () => {
+    expectRules(networkPolicy('  podSelector: {}\n'), []);
+  });
+
+  describe('podSelector', () => {
+    it('leaves an unrecognised operator to the enum rule', () => {
+      const yaml = networkPolicy(
+        '  podSelector:\n    matchExpressions:\n      - key: env\n        operator: Bogus\n',
+      );
+      expectRule(yaml, 'enum/invalid-value');
+      expectNoRule(yaml, 'networkpolicy/selector-values-required');
+    });
+
+    it('rejects an In operator with no values', () => {
+      const yaml = networkPolicy(
+        '  podSelector:\n    matchExpressions:\n      - key: env\n        operator: In\n',
+      );
+      const finding = expectRule(yaml, 'networkpolicy/selector-values-required');
+      expect(finding.path).toEqual(['spec', 'podSelector', 'matchExpressions', 0]);
+    });
+
+    it('rejects an invalid label key in matchLabels', () => {
+      const yaml = networkPolicy('  podSelector:\n    matchLabels:\n      "": web\n');
+      expectRule(yaml, 'meta/invalid-label-key');
+    });
+  });
+
+  describe('policyTypes', () => {
+    it('rejects an unrecognised entry, with a suggestion', () => {
+      const finding = expectRule(
+        networkPolicy('  podSelector: {}\n  policyTypes:\n    - ingress\n'),
+        'networkpolicy/invalid-policy-type',
+      );
+      expect(finding.message).toContain('Did you mean "Ingress"');
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['spec', 'policyTypes', 0], value: 'Ingress' },
+      ]);
+    });
+
+    it('rejects more than two entries', () => {
+      const finding = expectRule(
+        networkPolicy('  podSelector: {}\n  policyTypes:\n    - Ingress\n    - Egress\n    - Ingress\n'),
+        'networkpolicy/too-many-policy-types',
+      );
+      expect(finding.path).toEqual(['spec', 'policyTypes']);
+    });
+
+    it('warns when egress rules are declared but policyTypes omits Egress', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  policyTypes:\n    - Ingress\n  egress:\n    - to:\n        - ipBlock:\n            cidr: 10.0.0.0/8\n',
+      );
+      const finding = expectRule(yaml, 'networkpolicy/policy-type-mismatch');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['spec', 'egress']);
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('does not warn when the rule list is covered', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  policyTypes:\n    - Egress\n  egress:\n    - to:\n        - ipBlock:\n            cidr: 10.0.0.0/8\n',
+      );
+      expectNoRule(yaml, 'networkpolicy/policy-type-mismatch');
+    });
+
+    it('does not warn when policyTypes is left out entirely', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  egress:\n    - to:\n        - ipBlock:\n            cidr: 10.0.0.0/8\n',
+      );
+      expectNoRule(yaml, 'networkpolicy/policy-type-mismatch');
+    });
+
+    it('does not double-report coverage on top of an already-invalid entry', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  policyTypes:\n    - ingress\n  egress:\n    - to:\n        - ipBlock:\n            cidr: 10.0.0.0/8\n',
+      );
+      expectNoRule(yaml, 'networkpolicy/policy-type-mismatch');
+    });
+  });
+
+  describe('peers', () => {
+    it('rejects a peer naming none of podSelector, namespaceSelector or ipBlock', () => {
+      const finding = expectRule(networkPolicyWithPeer('        - {}\n'), 'networkpolicy/empty-peer');
+      expect(finding.path).toEqual(['spec', 'ingress', 0, 'from', 0]);
+    });
+
+    it('rejects ipBlock combined with podSelector', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 10.0.0.0/8\n          podSelector:\n            matchLabels:\n              role: db\n',
+      );
+      expectRule(yaml, 'networkpolicy/ipblock-with-selector');
+    });
+
+    it('accepts a peer naming only a namespaceSelector', () => {
+      expectRules(
+        networkPolicyWithPeer('        - namespaceSelector:\n            matchLabels:\n              team: payments\n'),
+        [],
+      );
+    });
+
+    it('checks matchExpressions on a peer podSelector', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - podSelector:\n            matchExpressions:\n              - key: role\n                operator: In\n',
+      );
+      expectRule(yaml, 'networkpolicy/selector-values-required');
+    });
+  });
+
+  describe('ipBlock', () => {
+    it('leaves a missing cidr to the schema layer', () => {
+      const yaml = networkPolicyWithPeer('        - ipBlock: {}\n');
+      expectRule(yaml, 'schema/required-field');
+      expectNoRule(yaml, 'networkpolicy/missing-cidr');
+    });
+
+    it('reports an empty cidr itself', () => {
+      const yaml = networkPolicyWithPeer("        - ipBlock:\n            cidr: ''\n");
+      const finding = expectRule(yaml, 'networkpolicy/missing-cidr');
+      expect(finding.path).toEqual(['spec', 'ingress', 0, 'from', 0, 'ipBlock', 'cidr']);
+    });
+
+    it('rejects a cidr with no prefix length', () => {
+      const yaml = networkPolicyWithPeer('        - ipBlock:\n            cidr: 10.0.0.0\n');
+      const finding = expectRule(yaml, 'networkpolicy/invalid-cidr');
+      expect(finding.message).toContain('prefix length');
+    });
+
+    it('warns about a cidr with bits set beyond its prefix, and offers the masked fix', () => {
+      const yaml = networkPolicyWithPeer('        - ipBlock:\n            cidr: 10.1.1.5/8\n');
+      const finding = expectRule(yaml, 'networkpolicy/cidr-host-bits');
+      expect(finding.severity).toBe('warning');
+      expect(finding.message).toContain('10.0.0.0/8');
+      expect(finding.fix).toEqual({
+        title: 'Change to "10.0.0.0/8"',
+        safe: true,
+        ops: [
+          { op: 'set', path: ['spec', 'ingress', 0, 'from', 0, 'ipBlock', 'cidr'], value: '10.0.0.0/8' },
+        ],
+      });
+    });
+
+    it('does not warn about a cidr that is already masked', () => {
+      const yaml = networkPolicyWithPeer('        - ipBlock:\n            cidr: 10.0.0.0/8\n');
+      expectNoRule(yaml, 'networkpolicy/cidr-host-bits');
+    });
+
+    it('accepts an except that is a strict subset of cidr', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 10.0.0.0/8\n            except:\n              - 10.0.0.0/24\n',
+      );
+      expectRules(yaml, []);
+    });
+
+    it('rejects an except that is not inside cidr', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 10.0.0.0/8\n            except:\n              - 11.0.0.0/24\n',
+      );
+      const finding = expectRule(yaml, 'networkpolicy/except-not-subset');
+      expect(finding.path).toEqual(['spec', 'ingress', 0, 'from', 0, 'ipBlock', 'except', 0]);
+    });
+
+    it('rejects an except with the same or a wider prefix than cidr', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 10.0.0.0/8\n            except:\n              - 10.0.0.0/8\n',
+      );
+      expectRule(yaml, 'networkpolicy/except-not-subset');
+    });
+
+    it('rejects an except that is not a CIDR block', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 10.0.0.0/8\n            except:\n              - not-a-cidr\n',
+      );
+      expectRule(yaml, 'networkpolicy/invalid-cidr');
+    });
+
+    it('accepts an IPv6 block with a strict-subset except', () => {
+      const yaml = networkPolicyWithPeer(
+        '        - ipBlock:\n            cidr: 2001:db8::/32\n            except:\n              - 2001:db8:1::/48\n',
+      );
+      expectRules(yaml, []);
+    });
+  });
+
+  describe('ports', () => {
+    it('leaves an unrecognised protocol to the enum rule', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  ingress:\n    - ports:\n        - protocol: udp\n          port: 80\n',
+      );
+      expectRule(yaml, 'enum/invalid-value');
+    });
+
+    it('rejects a port number out of range', () => {
+      const yaml = networkPolicy('  podSelector: {}\n  ingress:\n    - ports:\n        - port: 70000\n');
+      const finding = expectRule(yaml, 'networkpolicy/invalid-port');
+      expect(finding.path).toEqual(['spec', 'ingress', 0, 'ports', 0, 'port']);
+    });
+
+    it('rejects an invalid port name', () => {
+      // Quoted, this is read as a name — and a name of only digits has no
+      // letter, which IsValidPortName requires.
+      const yaml = networkPolicy('  podSelector: {}\n  ingress:\n    - ports:\n        - port: "8080"\n');
+      const finding = expectRule(yaml, 'networkpolicy/invalid-port-name');
+      expect(finding.message).toContain('at least one letter');
+    });
+
+    it('accepts a named port', () => {
+      expectRules(
+        networkPolicy('  podSelector: {}\n  ingress:\n    - ports:\n        - port: http\n'),
+        [],
+      );
+    });
+
+    it('rejects endPort without port', () => {
+      const yaml = networkPolicy('  podSelector: {}\n  ingress:\n    - ports:\n        - endPort: 90\n');
+      const finding = expectRule(yaml, 'networkpolicy/endport-without-port');
+      expect(finding.path).toEqual(['spec', 'ingress', 0, 'ports', 0, 'endPort']);
+    });
+
+    it('rejects endPort with a named port', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  ingress:\n    - ports:\n        - port: http\n          endPort: 90\n',
+      );
+      expectRule(yaml, 'networkpolicy/endport-with-named-port');
+    });
+
+    it('rejects endPort below port', () => {
+      const yaml = networkPolicy(
+        '  podSelector: {}\n  ingress:\n    - ports:\n        - port: 8080\n          endPort: 80\n',
+      );
+      const finding = expectRule(yaml, 'networkpolicy/endport-before-port');
+      expect(finding.message).toContain('greater than or equal to');
+    });
+
+    it('accepts a valid port range', () => {
+      expectRules(
+        networkPolicy(
+          '  podSelector: {}\n  ingress:\n    - ports:\n        - port: 8000\n          endPort: 9000\n',
+        ),
+        [],
       );
     });
   });
