@@ -14,6 +14,7 @@ const DNS_1035_LABEL = /^[a-z]([-a-z0-9]*[a-z0-9])?$/;
 const C_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const QUALIFIED_NAME = /^([A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?)$/;
 const LABEL_VALUE = /^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$/;
+const CONFIG_MAP_KEY = /^[-._a-zA-Z0-9]+$/;
 /** Characters an HTTP path may carry, RFC 3986 as apimachinery reads it. */
 const HTTP_PATH = /^[A-Za-z0-9/\-._~%!$&'()*+,;=:]+$/;
 
@@ -165,6 +166,25 @@ export function isQualifiedName(value: string): FormatCheck {
       ok: false,
       reason:
         'name part must consist of alphanumerics, "-", "_" or ".", and must start and end with an alphanumeric character',
+    };
+  return { ok: true };
+}
+
+/**
+ * A key in a ConfigMap's (or a Secret's) data: IsConfigMapKey in
+ * k8s.io/apimachinery/pkg/util/validation. Deliberately without that
+ * function's `hasChDirPrefix` half — "." and ".." are rejected too, but
+ * because the key becomes a filename when the map is mounted rather than
+ * because of its spelling, so `rules/configmap.ts` reports those separately.
+ */
+export function isConfigMapKey(value: string): FormatCheck {
+  if (value.length === 0) return { ok: false, reason: 'must not be empty' };
+  if (value.length > DNS_1123_SUBDOMAIN_MAX)
+    return { ok: false, reason: `must be at most ${DNS_1123_SUBDOMAIN_MAX} characters` };
+  if (!CONFIG_MAP_KEY.test(value))
+    return {
+      ok: false,
+      reason: 'must consist of alphanumerics, "-", "_" or "."',
     };
   return { ok: true };
 }

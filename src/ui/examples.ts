@@ -632,4 +632,31 @@ spec:
             cidr: 0.0.0.0/0
 `,
   },
+  {
+    id: 'configmap',
+    label: 'A ConfigMap with problems',
+    blurb:
+      'A key with a space in it, one that names a path rather than a file, a key claimed by both data and binaryData, a value that is not base64 and one that YAML read as a number.',
+    yaml: `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+  namespace: shop
+data:
+  # Keys become filenames when the map is mounted, so a space is not allowed.
+  log level: debug
+  # "8080" is quoted in the API: data is a map of strings, and an unquoted
+  # number is not one.
+  PORT: 8080
+  # A key starting with ".." would be written outside the mount directory.
+  ..cache: /var/cache
+  # Claimed by binaryData below as well; the two maps share one namespace of
+  # keys, so only one of them may carry it.
+  favicon.ico: placeholder
+binaryData:
+  favicon.ico: AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAA=
+  # Not base64, so the apiserver cannot decode it into bytes at all.
+  logo.png: <svg />
+`,
+  },
 ];

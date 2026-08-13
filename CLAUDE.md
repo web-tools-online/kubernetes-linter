@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -118,7 +118,7 @@ reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
-StorageClass and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
+StorageClass, a NetworkPolicy, a ConfigMap and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
 (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -132,13 +132,13 @@ for a message. There are no `['spec', …]` literals left in the PodSpec rules; 
 silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
-`rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts` and
-`rules/httproute.ts`, which
+`rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
+`rules/configmap.ts` and `rules/httproute.ts`, which
 address `spec.selector`, `spec.strategy`, `spec.updateStrategy`, `spec.completionMode`,
 `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`, `spec.accessModes`,
 `spec.capacity` and the like — fields of the object itself, not of any pod spec.
-`storageclass.ts` goes one step further and addresses `ctx.doc` directly: a StorageClass has no
-`spec` at all, so `provisioner` and the rest are document-root fields.
+`storageclass.ts` and `configmap.ts` go one step further and address `ctx.doc` directly: neither
+kind has a `spec` at all, so `provisioner`, `data` and the rest are document-root fields.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -148,7 +148,8 @@ is kind-correct for free.
 Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem wherever it lives —
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
-`storageclass/*` / `httproute/*` for checks on the object itself. The two document-level rules are named for what they check rather than for a
+`storageclass/*` / `networkpolicy/*` / `configmap/*` / `httproute/*` for checks on the object
+itself. The two document-level rules are named for what they check rather than for a
 kind, since they run for every kind including one with no Pod: `meta/*` in `metadata.ts` and
 `enum/*` in `enums.ts`. `Schema` is per version and holds every root; `Schema.for(kind)`
 returns the `KindSchema` view that both lint layers actually use.
@@ -340,14 +341,35 @@ ones, pinned as upstream's own drift in `tests/versions.test.ts` rather than tre
 here. Nothing in the module itself is version-gated: every field it checks, `endPort` included,
 has been part of networking/v1 NetworkPolicy since before the 1.25 floor.
 
+`configmap.ts` is the ninth, and the second kind with **no `spec`**: like `storageclass.ts` it
+reads `ctx.doc`, since `data`, `binaryData` and `immutable` are document-root fields. It is also
+the kind layer 1 covers the most of, precisely because there is so little to cover — the two
+maps are `map[string]string`, so a value written as a bare number is `schema/type` with the
+usual quoting fix, and nothing is required at all, an empty ConfigMap being perfectly valid. It
+is the keys rather than the fields that carry the rules, and a key is not a field the schema
+walk can see. What is left is what OpenAPI cannot express: the key format (`isConfigMapKey` in
+`k8s/names.ts`, mirroring apimachinery's `IsConfigMapKey`), the two maps not sharing a key, and
+the 1 MiB cap `MaxSecretSize` puts on both together. The `.`/`..`/`..`-prefixed spellings that
+upstream's `hasChDirPrefix` half rejects are reported under a rule of their own rather than
+folded into the format check, since they fail for a different reason — a key is a *filename*
+when the map is mounted, so those three would name the mount directory, its parent, or a path
+outside it. One check moved into layer 1 instead of being written here: a binaryData value is
+`format: byte`, so `schema.ts` gained a generic `schema/base64` check the same way it gained
+`schema/enum` and the rest for HTTPRoute, purely additively — `format: byte` appears nowhere
+else in any bundle, and `k8s/base64.ts` answers both halves of the question at once, since the
+size cap needs the decoded length of exactly the values that decode. Deliberately skipped: the
+immutability of `data` and `binaryData` once `immutable: true` has been applied, which — like a
+StorageClass's `provisioner` — only constrains an update. Nothing is version-gated: core/v1
+ConfigMap has carried all three fields since well before the 1.25 floor.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
-markers, unlike the hand-written Kubernetes API types the other twelve kinds come from, where
+markers, unlike the hand-written Kubernetes API types the other fourteen kinds come from, where
 `rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
 Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
 gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
 `schema/out-of-range`, `schema/list-size`), purely additively — no k8s bundle definition sets
-any of them, so the other twelve kinds are unaffected. That leaves `httproute.ts` with only
+any of them, so the other fourteen kinds are unaffected. That leaves `httproute.ts` with only
 what the CRD's schema cannot express at all: its `x-kubernetes-validations` (CEL) rules, which
 `generate-schema.mjs` strips during flattening since layer 1 cannot evaluate CEL, and which are
 reimplemented by hand instead — filter `type` agreeing with its populated field, `parentRefs`
@@ -389,8 +411,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(227 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 249 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(228 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 250 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -416,7 +438,9 @@ NetworkPolicy is cheap too, and the reason is the same as CronJob's: it shares `
 it adds only its own seven definitions — `NetworkPolicy`, `NetworkPolicySpec`,
 `NetworkPolicyIngressRule`, `NetworkPolicyEgressRule`, `NetworkPolicyPeer`, `NetworkPolicyPort`
 and `IPBlock` — an eighth, `NetworkPolicyStatus`, on the 1.25-1.27 bundles only, since upstream
-dropped the field from the type in 1.28. API descriptions are kept on
+dropped the field from the type in 1.28. ConfigMap is the cheapest root of them all: its `data`
+and `binaryData` are plain string maps, so below `ObjectMeta` it reaches nothing and the closure
+grows by its own definition alone. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -435,7 +459,7 @@ them property-by-property would produce nonsense.
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
-  `httproute/<thing>` for checks on
+  `configmap/<thing>` / `httproute/<thing>` for checks on
   the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.

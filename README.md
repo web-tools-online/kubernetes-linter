@@ -2,11 +2,11 @@
 
 An online linter for Kubernetes **Pod**, **Deployment**, **StatefulSet**, **DaemonSet**,
 **Job**, **CronJob**, **Service**, **Ingress**, **IngressClass**, **PersistentVolume**,
-**PersistentVolumeClaim**, **StorageClass**, **NetworkPolicy** and **HTTPRoute** (Gateway API)
-manifests. Paste YAML, get told what
+**PersistentVolumeClaim**, **StorageClass**, **NetworkPolicy**, **ConfigMap** and
+**HTTPRoute** (Gateway API) manifests. Paste YAML, get told what
 is wrong, why it is wrong, and — where the answer is unambiguous — apply the fix with one click.
 
-The kind comes from the document itself, so a multi-document manifest holding all fourteen is
+The kind comes from the document itself, so a multi-document manifest holding all fifteen is
 linted correctly in one pass.
 
 Everything runs in the browser. The manifest never leaves the tab: there is no server, no
@@ -34,6 +34,7 @@ exhaustive by construction:
 - duplicate entries in lists the API treats as maps (two containers named the same, two
   volumes named the same), derived from `x-kubernetes-list-map-keys`
 - duplicate YAML keys, which the apiserver's strict decoder rejects
+- a binary field whose value is not base64, which fails to decode before validation even begins
 
 **API validation rules**, transcribed from the checks the apiserver performs on top of the
 schema, which OpenAPI cannot express:
@@ -61,6 +62,7 @@ schema, which OpenAPI cannot express:
 | PersistentVolumeClaim | a missing or empty `accessModes`, an unrecognised one, `ReadWriteOncePod` combined with another mode, a missing or non-positive `resources.requests.storage`, a `storageClassName` or `volumeAttributesClassName` that is not a DNS subdomain, a `dataSource`/`dataSourceRef` missing a `name` or `kind`, one naming a non-core kind with no `apiGroup`, a `dataSource` set alongside a cross-namespace `dataSourceRef`, and the two naming different objects. The same checks run against a StatefulSet's `volumeClaimTemplates` and a Pod's `ephemeral.volumeClaimTemplate`, which the apiserver validates with the very same function |
 | StorageClass | a `metadata.namespace` on a cluster-scoped object, an empty `provisioner` or one that is not a qualified name, a `parameters` map with an empty key, over 512 entries or over 256 KiB across all keys and values, an `allowedTopologies` term requiring the same label key twice, a requirement listing no values or the same value twice, a topology key that is not a valid label key, two terms requiring exactly the same thing, and a `storageclass.kubernetes.io/is-default-class` annotation (or its beta spelling) whose value is not the exact string the admission plugin reads |
 | NetworkPolicy | a peer naming none of `podSelector`, `namespaceSelector` or `ipBlock`, or combining `ipBlock` with either selector, an `ipBlock.cidr` that is empty or malformed, one with bits set beyond its prefix length, an `except` entry that is not a strict subset of its `cidr`, a `port`/`endPort` pair where `endPort` is set without `port`, set on a named port, or below `port`, an out-of-range port number or invalid port name, more than two `policyTypes`, an unrecognised one, and an `ingress`/`egress` rule list that `policyTypes` does not cover |
+| ConfigMap | a `data` or `binaryData` key that is empty, over 253 characters or carries anything but alphanumerics, `-`, `_` and `.`, one spelled `.`, `..` or with a `..` prefix (each would name a path rather than a file once mounted), a key claimed by both maps at once, and a `data`/`binaryData` pair totalling over 1 MiB |
 | HTTPRoute | two `parentRefs` to the same parent without a `sectionName` each, or with the same one twice, more than 128 matches across all rules, a `RequestRedirect` filter alongside `backendRefs` on the same rule, a `ReplacePrefixMatch` rewrite on a rule without exactly one `PathPrefix` match, a Service `backendRef` (the default `group`/`kind`) with no `port`, a filter list with both a `RequestRedirect` and a `URLRewrite`, or the same filter type twice, a filter whose populated field disagrees with its `type`, a `requestMirror` setting both `percent` and `fraction` or a `fraction` whose numerator exceeds its denominator, a path modifier whose populated field disagrees with its `type`, a `backendRequest` timeout longer than `request`, and a match path containing `//`, `/./`, `/../` or an escaped slash |
 
 The PodSpec rows apply to every kind that carries a pod template: there is one PodSpec rule
@@ -69,7 +71,7 @@ set, addressed relative to whichever kind the document declares, so it reports a
 are folded into that: the controller adds one Pod volume per template, so mounting one is
 recognised as valid even though `spec.template.spec.volumes` never mentions it. A Service, an
 Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a StorageClass, a
-NetworkPolicy and an HTTPRoute have no
+NetworkPolicy, a ConfigMap and an HTTPRoute have no
 pod template at all, so those rules do not run for them — each is checked by the schema, the
 name and label rules every object gets, and its own row above.
 
@@ -159,10 +161,10 @@ name to validate. Each kind keeps its own rule module — `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`, `rules/persistentvolume.ts`,
 `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`, `rules/networkpolicy.ts`,
-`rules/httproute.ts` — since what the
-apiserver checks beyond the pod template is particular to it. StorageClass is the one kind with
-no `spec` at all: its fields hang off the document root, so its module addresses `ctx.doc`
-directly where every other kind's addresses `ctx.doc['spec']`. HTTPRoute's checks come from its CRD's `x-kubernetes-validations` (CEL) rules rather than a
+`rules/configmap.ts`, `rules/httproute.ts` — since what the
+apiserver checks beyond the pod template is particular to it. StorageClass and ConfigMap are the
+two kinds with no `spec` at all: their fields hang off the document root, so their modules
+address `ctx.doc` directly where every other kind's addresses `ctx.doc['spec']`. HTTPRoute's checks come from its CRD's `x-kubernetes-validations` (CEL) rules rather than a
 hand-written Go validator, reimplemented by hand since layer 1 cannot evaluate CEL; everything
 that CRD's own OpenAPI schema already states — every `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` on it — is instead covered generically, by the same schema layer every

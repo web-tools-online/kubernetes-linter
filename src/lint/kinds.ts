@@ -1,5 +1,6 @@
 import type { Path } from './types.js';
 import type { Rule } from './rules/context.js';
+import { configMapRule } from './rules/configmap.js';
 import { cronJobRule } from './rules/cronjob.js';
 import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
@@ -145,5 +146,9 @@ export const KINDS: Record<string, KindDescriptor> = {
   NetworkPolicy: {
     kind: 'NetworkPolicy',
     rules: [networkPolicyRule],
+  },
+  ConfigMap: {
+    kind: 'ConfigMap',
+    rules: [configMapRule],
   },
 };
