@@ -31,6 +31,9 @@
  * StorageClass is back to cheap: it is the only root outside core/v1, apps/v1,
  * batch/v1 and networking/v1, but below its own definition it reaches just
  * TopologySelectorTerm and TopologySelectorLabelRequirement — three in total.
+ * ConfigMap is the cheapest root there is: its data and binaryData are plain
+ * string maps, so below ObjectMeta it reaches nothing at all and the closure
+ * grows by exactly one definition, its own.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -68,6 +71,7 @@ const ROOTS = {
   PersistentVolumeClaim: 'io.k8s.api.core.v1.PersistentVolumeClaim',
   StorageClass: 'io.k8s.api.storage.v1.StorageClass',
   NetworkPolicy: 'io.k8s.api.networking.v1.NetworkPolicy',
+  ConfigMap: 'io.k8s.api.core.v1.ConfigMap',
 };
 
 /**

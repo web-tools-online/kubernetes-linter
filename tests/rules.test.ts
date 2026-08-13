@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  VALID_CONFIGMAP,
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
@@ -13,6 +14,8 @@ import {
   VALID_SERVICE,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
+  configMap,
+  configMapData,
   cronJob,
   cronJobWithPodSpec,
   daemonSet,
@@ -4392,6 +4395,135 @@ describe('networkpolicy', () => {
         ),
         [],
       );
+    });
+  });
+});
+
+describe('configmap', () => {
+  it('accepts a valid ConfigMap', () => {
+    expectRules(VALID_CONFIGMAP, []);
+  });
+
+  it('accepts a ConfigMap with no data at all', () => {
+    expectRules(configMap(''), []);
+  });
+
+  describe('keys', () => {
+    it('rejects a key with a character a filename may not carry', () => {
+      const finding = expectRule(
+        configMapData('  "log level": info\n'),
+        'configmap/invalid-key',
+      );
+      expect(finding.path).toEqual(['data', 'log level']);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'rename', path: ['data', 'log level'], to: 'log_level' },
+      ]);
+      // Every Pod referring to the key would have to change with it.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('rejects a key with a "/" and does not suggest a path', () => {
+      const finding = expectRule(configMapData('  app/config: info\n'), 'configmap/invalid-key');
+      expect(finding.fix?.ops).toEqual([
+        { op: 'rename', path: ['data', 'app/config'], to: 'app_config' },
+      ]);
+    });
+
+    it('rejects a key over 253 characters, with no fix to offer', () => {
+      const finding = expectRule(
+        configMapData(`  ${'k'.repeat(254)}: info\n`),
+        'configmap/invalid-key',
+      );
+      expect(finding.message).toContain('at most 253 characters');
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('checks binaryData keys the same way', () => {
+      const finding = expectRule(
+        configMap('binaryData:\n  "icon file": AAAA\n'),
+        'configmap/invalid-key',
+      );
+      expect(finding.path).toEqual(['binaryData', 'icon file']);
+    });
+
+    it('accepts uppercase, digits, "-", "_" and "."', () => {
+      expectRules(configMapData('  LOG_LEVEL.2: info\n  my-file.conf: a\n'), []);
+    });
+
+    it('rejects "." and ".." as paths rather than as spellings', () => {
+      for (const key of ['.', '..', '..data']) {
+        const finding = expectRule(configMapData(`  "${key}": a\n`), 'configmap/relative-path-key');
+        expect(finding.path).toEqual(['data', key]);
+        expect(finding.fix).toBeUndefined();
+      }
+    });
+
+    it('accepts a leading single dot, which is only a hidden file', () => {
+      expectRules(configMapData('  .env: A=1\n'), []);
+    });
+  });
+
+  describe('data and binaryData overlapping', () => {
+    it('rejects a key present in both maps', () => {
+      const yaml = configMap('data:\n  config: a\nbinaryData:\n  config: YQ==\n');
+      const finding = expectRule(yaml, 'configmap/duplicate-key');
+      expect(finding.path).toEqual(['data', 'config']);
+    });
+
+    it('accepts the two maps when their keys are distinct', () => {
+      expectRules(configMap('data:\n  config: a\nbinaryData:\n  icon: YQ==\n'), []);
+    });
+  });
+
+  describe('binaryData values', () => {
+    it('leaves a value that is not base64 to the schema layer', () => {
+      const yaml = configMap('binaryData:\n  icon: not base64!\n');
+      const finding = expectRule(yaml, 'schema/base64');
+      expect(finding.path).toEqual(['binaryData', 'icon']);
+      expectNoRule(yaml, 'configmap/too-large');
+    });
+
+    it('rejects base64 that is not padded to a multiple of four', () => {
+      expectRule(configMap('binaryData:\n  icon: YQ\n'), 'schema/base64');
+    });
+
+    it('accepts a value wrapped across lines', () => {
+      expectRules(configMap('binaryData:\n  icon: |\n    YWJjZGVm\n    Z2hpamts\n'), []);
+    });
+
+    it('says nothing about a plain data value, which is not base64 at all', () => {
+      expectNoRule(configMapData('  greeting: hello world!\n'), 'schema/base64');
+    });
+  });
+
+  describe('total size', () => {
+    it('rejects data and binaryData that together exceed 1 MiB', () => {
+      const finding = expectRule(
+        configMap(`data:\n  a: ${'x'.repeat(600 * 1024)}\nbinaryData:\n  b: ${'A'.repeat(700 * 1024)}\n`),
+        'configmap/too-large',
+      );
+      expect(finding.path).toEqual([]);
+      expect(finding.message).toContain('1.0 MiB limit');
+    });
+
+    it('measures a data value in bytes rather than characters', () => {
+      // Three bytes per "€", so 400k of them are over the cap that 400k
+      // ASCII characters would sit well under.
+      expectRule(
+        configMapData(`  a: ${'€'.repeat(400 * 1024)}\n`),
+        'configmap/too-large',
+      );
+      expectRules(configMapData(`  a: ${'x'.repeat(400 * 1024)}\n`), []);
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(configMap('', '  name: Web_Config\n'), 'meta/invalid-name');
+    });
+
+    it('accepts a namespace, since a ConfigMap is namespaced', () => {
+      expectRules(configMap('', '  name: web-config\n  namespace: shop\n'), []);
     });
   });
 });

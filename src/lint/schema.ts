@@ -1,6 +1,7 @@
 import type { Finding, Path } from './types.js';
 import { didYouMean } from './suggest.js';
 import { parseQuantity } from '../k8s/quantity.js';
+import { decodedByteLength } from '../k8s/base64.js';
 
 /** The subset of OpenAPI v2 that the Kubernetes spec actually uses. */
 export interface SchemaNode {
@@ -400,6 +401,7 @@ function checkPrimitive(
         findings.push(typeMismatch(path, 'string', value, property.description));
         break;
       }
+      checkStringFormat(value, property, path, findings);
       checkStringConstraints(value, property, path, findings);
       break;
     case 'integer':
@@ -424,6 +426,30 @@ function checkPrimitive(
     default:
       break;
   }
+}
+
+/**
+ * The one `format` the closure carries that says anything a `type` does not:
+ * a `[]byte` field is base64 on the wire, and a value that does not decode is
+ * rejected before validation even begins, when the request body is unmarshalled.
+ * Today that is a ConfigMap's binaryData and nothing else.
+ */
+function checkStringFormat(value: string, property: SchemaNode, path: Path, findings: Finding[]): void {
+  if (property.format !== 'byte' || decodedByteLength(value) !== undefined) return;
+
+  findings.push({
+    ruleId: 'schema/base64',
+    severity: 'error',
+    path,
+    message: 'This field holds binary data, so its value must be base64.',
+    explanation: [
+      'The apiserver decodes it as standard base64 with padding — A-Z, a-z, 0-9, "+" and "/", padded to a multiple of four with "=" — and rejects the whole object when it cannot. Text that needs no encoding belongs in a plain string field instead.',
+      property.description,
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    docsUrl: docsUrlFrom(property.description),
+  });
 }
 
 /**

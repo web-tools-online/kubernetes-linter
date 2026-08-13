@@ -8,6 +8,7 @@ import {
 } from '../src/lint/index.js';
 import { EXAMPLES } from '../src/ui/examples.js';
 import {
+  VALID_CONFIGMAP,
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
@@ -21,6 +22,7 @@ import {
   VALID_SERVICE,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
+  configMapData,
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
@@ -98,6 +100,7 @@ describe('bundled versions', () => {
         'PersistentVolumeClaim',
         'StorageClass',
         'NetworkPolicy',
+        'ConfigMap',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -112,6 +115,7 @@ describe('bundled versions', () => {
       expect(schema.for('PersistentVolume')?.apiVersion, version).toBe('v1');
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
       expect(schema.for('NetworkPolicy')?.apiVersion, version).toBe('networking.k8s.io/v1');
+      expect(schema.for('ConfigMap')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -241,6 +245,25 @@ describe('bundled versions', () => {
     );
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['networkpolicy/endport-before-port']);
+    }
+  });
+
+  it('lints a valid ConfigMap cleanly on every version', async () => {
+    // The fourteenth root, and the cheapest of them all: below ObjectMeta it
+    // reaches nothing, so the closure grows by its own definition alone and
+    // this is the tripwire for the roots map more than for the closure.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_CONFIGMAP, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a ConfigMap the same way on every version', async () => {
+    // core/v1 ConfigMap has carried data, binaryData and immutable since well
+    // before the 1.25 floor, so nothing in its rule module is version-gated.
+    const yaml = configMapData('  "log level": info\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['configmap/invalid-key']);
     }
   });
 

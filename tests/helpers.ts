@@ -571,3 +571,37 @@ export function networkPolicy(specFragment: string, metadataFragment = '  name: 
 export function networkPolicyWithPeer(peerFragment: string): string {
   return networkPolicy(`  podSelector: {}\n  ingress:\n    - from:\n${peerFragment}`);
 }
+
+/** A minimal valid ConfigMap that individual tests mutate. */
+export const VALID_CONFIGMAP = `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-config
+data:
+  LOG_LEVEL: info
+  nginx.conf: |
+    server {
+      listen 80;
+    }
+binaryData:
+  favicon.ico: AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAA=
+immutable: true
+`;
+
+/**
+ * Build a ConfigMap from a fragment of its top-level fields. Like
+ * `storageClass()` the fragment is not a spec — a ConfigMap has none, so data
+ * and binaryData sit directly under the document and the fragment is indented
+ * zero spaces rather than the two `pod()` uses.
+ */
+export function configMap(
+  fieldsFragment: string,
+  metadataFragment = '  name: web-config\n',
+): string {
+  return `apiVersion: v1\nkind: ConfigMap\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/** A ConfigMap whose `data` map carries the given entries. */
+export function configMapData(entriesFragment: string): string {
+  return configMap(`data:\n${entriesFragment}`);
+}
