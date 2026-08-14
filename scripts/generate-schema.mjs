@@ -33,7 +33,9 @@
  * TopologySelectorTerm and TopologySelectorLabelRequirement — three in total.
  * ConfigMap is the cheapest root there is: its data and binaryData are plain
  * string maps, so below ObjectMeta it reaches nothing at all and the closure
- * grows by exactly one definition, its own.
+ * grows by exactly one definition, its own. Secret is exactly as cheap and for
+ * the same reason: data and stringData are plain string maps too, and type and
+ * immutable are scalars, so it also adds only its own definition.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -72,6 +74,7 @@ const ROOTS = {
   StorageClass: 'io.k8s.api.storage.v1.StorageClass',
   NetworkPolicy: 'io.k8s.api.networking.v1.NetworkPolicy',
   ConfigMap: 'io.k8s.api.core.v1.ConfigMap',
+  Secret: 'io.k8s.api.core.v1.Secret',
 };
 
 /**

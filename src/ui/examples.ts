@@ -659,4 +659,31 @@ binaryData:
   logo.png: <svg />
 `,
   },
+  {
+    id: 'secret',
+    label: 'A Secret with problems',
+    blurb:
+      'A key with a space in it, one that names a path outside the mount directory, a TLS secret missing tls.key, and a key claimed by both data and stringData that stringData silently overwrites.',
+    yaml: `apiVersion: v1
+kind: Secret
+metadata:
+  name: web-tls
+  namespace: shop
+type: kubernetes.io/tls
+data:
+  # Keys become filenames when the Secret is mounted, so a space is not allowed.
+  "tls certificate": dGVzdA==
+  # A key starting with ".." would be written outside the mount directory.
+  ..backup: dGVzdA==
+  # tls.key is missing entirely: only presence is required for a TLS secret,
+  # so an empty value would have been fine, but an absent one is not.
+  tls.crt: dGVzdA==
+  # Claimed by stringData below as well; stringData silently overwrites it
+  # rather than the apiserver rejecting the overlap, as it would for a
+  # ConfigMap's data and binaryData.
+  token: cGxhY2Vob2xkZXI=
+stringData:
+  token: replaced-value
+`,
+  },
 ];

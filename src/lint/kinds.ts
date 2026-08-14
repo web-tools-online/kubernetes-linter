@@ -11,6 +11,7 @@ import { jobRule } from './rules/job.js';
 import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
+import { secretRule } from './rules/secret.js';
 import { serviceRule } from './rules/service.js';
 import { statefulSetRule } from './rules/statefulset.js';
 import { storageClassRule } from './rules/storageclass.js';
@@ -150,5 +151,9 @@ export const KINDS: Record<string, KindDescriptor> = {
   ConfigMap: {
     kind: 'ConfigMap',
     rules: [configMapRule],
+  },
+  Secret: {
+    kind: 'Secret',
+    rules: [secretRule],
   },
 };

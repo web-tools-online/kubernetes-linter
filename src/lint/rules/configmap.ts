@@ -1,25 +1,11 @@
-import { decodedByteLength } from '../../k8s/base64.js';
-import { isConfigMapKey } from '../../k8s/names.js';
+import { decodedByteLength, MAX_SECRET_SIZE_BYTES } from '../../k8s/base64.js';
+import { isConfigMapKey, isRelativePathKey } from '../../k8s/names.js';
 import type { Path } from '../types.js';
 import { asObject, asString, type Rule, type RuleContext } from './context.js';
 
 const CONFIGMAP_DOCS = 'https://kubernetes.io/docs/concepts/configuration/configmap/';
 const MOUNT_DOCS =
   'https://kubernetes.io/docs/tasks/configure-pod-container/configure-pod-configmap/#populate-a-volume-with-data-stored-in-a-configmap';
-
-/**
- * core.MaxSecretSize, which a ConfigMap is measured against too: the sum of
- * every value in data and binaryData, decoded, may not exceed 1 MiB.
- */
-const MAX_TOTAL_BYTES = 1024 * 1024;
-
-/**
- * hasChDirPrefix, the half of upstream's IsConfigMapKey that
- * `k8s/names.ts` leaves out: a key is a filename when the map is projected
- * into a volume, so "." and ".." name the directory itself and its parent, and
- * anything starting with ".." would climb out of it.
- */
-const RELATIVE_PATH_KEY = /^\.$|^\.\./;
 
 /**
  * The checks the apiserver runs on a ConfigMap, from ValidateConfigMap in
@@ -77,14 +63,14 @@ export const configMapRule: Rule = {
       bytes += decodedByteLength(asString(value) ?? '') ?? 0;
     }
 
-    if (bytes > MAX_TOTAL_BYTES) {
+    if (bytes > MAX_SECRET_SIZE_BYTES) {
       ctx.report({
         ruleId: 'configmap/too-large',
         severity: 'error',
         // Upstream reports this against the object rather than either map,
         // since it is the two together that are over the cap.
         path: [],
-        message: `data and binaryData total ${formatBytes(bytes)}, over the ${formatBytes(MAX_TOTAL_BYTES)} limit.`,
+        message: `data and binaryData total ${formatBytes(bytes)}, over the ${formatBytes(MAX_SECRET_SIZE_BYTES)} limit.`,
         explanation:
           'Every ConfigMap a node needs is held in the kubelet\'s memory and re-sent on every watch event, so the apiserver caps one at 1 MiB — the same cap a Secret has. Something this large is usually a file that belongs in an image, a volume, or an object store the Pod reads at startup instead.',
         docsUrl: CONFIGMAP_DOCS,
@@ -101,7 +87,7 @@ export const configMapRule: Rule = {
 function checkKey(ctx: RuleContext, key: string, base: Path): void {
   const path: Path = [...base, key];
 
-  if (RELATIVE_PATH_KEY.test(key)) {
+  if (isRelativePathKey(key)) {
     ctx.report({
       ruleId: 'configmap/relative-path-key',
       severity: 'error',
@@ -147,7 +133,7 @@ function checkKey(ctx: RuleContext, key: string, base: Path): void {
  */
 function suggestKey(key: string): string | undefined {
   const candidate = key.trim().replace(/[^-._a-zA-Z0-9]+/g, '_');
-  return candidate !== key && isConfigMapKey(candidate).ok && !RELATIVE_PATH_KEY.test(candidate)
+  return candidate !== key && isConfigMapKey(candidate).ok && !isRelativePathKey(candidate)
     ? candidate
     : undefined;
 }

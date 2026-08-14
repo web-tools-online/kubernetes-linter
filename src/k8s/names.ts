@@ -171,11 +171,13 @@ export function isQualifiedName(value: string): FormatCheck {
 }
 
 /**
- * A key in a ConfigMap's (or a Secret's) data: IsConfigMapKey in
- * k8s.io/apimachinery/pkg/util/validation. Deliberately without that
- * function's `hasChDirPrefix` half — "." and ".." are rejected too, but
- * because the key becomes a filename when the map is mounted rather than
- * because of its spelling, so `rules/configmap.ts` reports those separately.
+ * A key in a ConfigMap's or a Secret's data: IsConfigMapKey in
+ * k8s.io/apimachinery/pkg/util/validation, shared verbatim by both kinds'
+ * validators. Deliberately without that function's `hasChDirPrefix` half —
+ * "." and ".." are rejected too, but because the key becomes a filename when
+ * the map is mounted rather than because of its spelling, so
+ * `rules/configmap.ts` and `rules/secret.ts` report those separately, via
+ * `isRelativePathKey`.
  */
 export function isConfigMapKey(value: string): FormatCheck {
   if (value.length === 0) return { ok: false, reason: 'must not be empty' };
@@ -187,6 +189,16 @@ export function isConfigMapKey(value: string): FormatCheck {
       reason: 'must consist of alphanumerics, "-", "_" or "."',
     };
   return { ok: true };
+}
+
+/**
+ * The `hasChDirPrefix` half of upstream's `IsConfigMapKey` that
+ * `isConfigMapKey` above leaves out: a key becomes a filename when the map
+ * it belongs to is mounted as a volume, so "." would be the mount directory
+ * itself, ".." its parent, and anything starting with ".." a path outside it.
+ */
+export function isRelativePathKey(value: string): boolean {
+  return value === '.' || value.startsWith('..');
 }
 
 export function isLabelValue(value: string): FormatCheck {
