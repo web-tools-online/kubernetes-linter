@@ -605,3 +605,30 @@ export function configMap(
 export function configMapData(entriesFragment: string): string {
   return configMap(`data:\n${entriesFragment}`);
 }
+
+/** A minimal valid Secret that individual tests mutate. */
+export const VALID_SECRET = `apiVersion: v1
+kind: Secret
+metadata:
+  name: web-tls
+type: kubernetes.io/tls
+data:
+  tls.crt: dGVzdC1jZXJ0
+  tls.key: dGVzdC1rZXk=
+immutable: true
+`;
+
+/**
+ * Build a Secret from a fragment of its top-level fields. Like `configMap()`
+ * the fragment is not a spec — a Secret has none, so data, stringData and
+ * type sit directly under the document and the fragment is indented zero
+ * spaces rather than the two `pod()` uses.
+ */
+export function secret(fieldsFragment: string, metadataFragment = '  name: web-tls\n'): string {
+  return `apiVersion: v1\nkind: Secret\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/** A Secret whose `data` map carries the given entries. */
+export function secretData(entriesFragment: string): string {
+  return secret(`data:\n${entriesFragment}`);
+}

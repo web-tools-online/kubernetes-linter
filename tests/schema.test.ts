@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap and HTTPRoute',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret and HTTPRoute',
       );
     });
 
@@ -320,6 +320,13 @@ describe('field descriptions', () => {
     expect(storageClass.describe(['spec'])).toBeUndefined();
   });
 
+  it('resolves a Secret field, which like a ConfigMap hangs off the root and not off a spec', () => {
+    const secret = schema.for('Secret')!;
+    expect(secret.describe(['type'])?.type).toBe('string');
+    expect(secret.describe(['data'])?.type).toBe('map[string]string');
+    expect(secret.describe(['spec'])).toBeUndefined();
+  });
+
   it('resolves a Job field, which no other root reaches', () => {
     const job = schema.for('Job')!;
     expect(job.describe(['spec', 'podFailurePolicy', 'rules', 0, 'action'])?.type).toBe('string');
@@ -374,6 +381,7 @@ describe('field descriptions', () => {
       'StorageClass',
       'NetworkPolicy',
       'ConfigMap',
+      'Secret',
       'HTTPRoute',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();

@@ -19,6 +19,7 @@ import {
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
+  VALID_SECRET,
   VALID_SERVICE,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
@@ -37,6 +38,7 @@ import {
   persistentVolumeClaim,
   pod,
   podWithContainer,
+  secretData,
   service,
   statefulSet,
   statefulSetWithPodSpec,
@@ -101,6 +103,7 @@ describe('bundled versions', () => {
         'StorageClass',
         'NetworkPolicy',
         'ConfigMap',
+        'Secret',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -116,6 +119,7 @@ describe('bundled versions', () => {
       expect(schema.for('PersistentVolumeClaim')?.apiVersion, version).toBe('v1');
       expect(schema.for('NetworkPolicy')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('ConfigMap')?.apiVersion, version).toBe('v1');
+      expect(schema.for('Secret')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -264,6 +268,26 @@ describe('bundled versions', () => {
     const yaml = configMapData('  "log level": info\n');
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['configmap/invalid-key']);
+    }
+  });
+
+  it('lints a valid Secret cleanly on every version', async () => {
+    // The fifteenth root, exactly as cheap as ConfigMap and for the same
+    // reason: below ObjectMeta it reaches nothing, so this is the tripwire
+    // for the roots map more than for the closure.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_SECRET, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a Secret the same way on every version', async () => {
+    // core/v1 Secret has carried data, stringData, type and immutable since
+    // well before the 1.25 floor, so nothing in its rule module is
+    // version-gated.
+    const yaml = secretData('  "log level": dGVzdA==\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['secret/invalid-key']);
     }
   });
 

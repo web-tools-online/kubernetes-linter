@@ -11,6 +11,7 @@ import {
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
+  VALID_SECRET,
   VALID_SERVICE,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
@@ -41,6 +42,8 @@ import {
   pod,
   podWithContainer,
   ruleIds,
+  secret,
+  secretData,
   service,
   statefulSet,
   statefulSetWithPodSpec,
@@ -4524,6 +4527,261 @@ describe('configmap', () => {
 
     it('accepts a namespace, since a ConfigMap is namespaced', () => {
       expectRules(configMap('', '  name: web-config\n  namespace: shop\n'), []);
+    });
+  });
+});
+
+describe('secret', () => {
+  it('accepts a valid Secret', () => {
+    expectRules(VALID_SECRET, []);
+  });
+
+  it('accepts an empty Opaque Secret', () => {
+    expectRules(secret(''), []);
+  });
+
+  describe('keys', () => {
+    it('rejects a key with a character a filename may not carry', () => {
+      const finding = expectRule(secretData('  "log level": dGVzdA==\n'), 'secret/invalid-key');
+      expect(finding.path).toEqual(['data', 'log level']);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'rename', path: ['data', 'log level'], to: 'log_level' },
+      ]);
+      // Every Pod referring to the key would have to change with it.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('rejects a key with a "/" and does not suggest a path', () => {
+      const finding = expectRule(secretData('  app/config: dGVzdA==\n'), 'secret/invalid-key');
+      expect(finding.fix?.ops).toEqual([
+        { op: 'rename', path: ['data', 'app/config'], to: 'app_config' },
+      ]);
+    });
+
+    it('rejects a key over 253 characters, with no fix to offer', () => {
+      const finding = expectRule(
+        secretData(`  ${'k'.repeat(254)}: dGVzdA==\n`),
+        'secret/invalid-key',
+      );
+      expect(finding.message).toContain('at most 253 characters');
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('checks stringData keys the same way', () => {
+      const finding = expectRule(
+        secret('stringData:\n  "log level": debug\n'),
+        'secret/invalid-key',
+      );
+      expect(finding.path).toEqual(['stringData', 'log level']);
+    });
+
+    it('accepts uppercase, digits, "-", "_" and "."', () => {
+      expectRules(secretData('  LOG_LEVEL.2: dGVzdA==\n  my-file.conf: dGVzdA==\n'), []);
+    });
+
+    it('rejects "." and ".." as paths rather than as spellings', () => {
+      for (const key of ['.', '..', '..data']) {
+        const finding = expectRule(secretData(`  "${key}": dGVzdA==\n`), 'secret/relative-path-key');
+        expect(finding.path).toEqual(['data', key]);
+        expect(finding.fix).toBeUndefined();
+      }
+    });
+
+    it('accepts a leading single dot, which is only a hidden file', () => {
+      expectRules(secretData('  .env: QT0x\n'), []);
+    });
+  });
+
+  describe('data and stringData overlapping', () => {
+    it('warns about a key present in both maps, rather than rejecting it', () => {
+      const yaml = secret('data:\n  password: cGFzcw==\nstringData:\n  password: hunter2\n');
+      const finding = expectRule(yaml, 'secret/overlapping-key');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['stringData', 'password']);
+    });
+
+    it('accepts the two maps when their keys are distinct', () => {
+      expectRules(secret('data:\n  a: dGVzdA==\nstringData:\n  b: test\n'), []);
+    });
+  });
+
+  describe('total size', () => {
+    it('rejects data and stringData that together exceed 1 MiB', () => {
+      const finding = expectRule(
+        secret(`data:\n  a: ${'A'.repeat(600 * 1024)}\nstringData:\n  b: ${'x'.repeat(600 * 1024)}\n`),
+        'secret/too-large',
+      );
+      expect(finding.path).toEqual([]);
+      expect(finding.message).toContain('1.0 MiB limit');
+    });
+
+    it('measures a stringData value in bytes rather than characters', () => {
+      // Three bytes per "€", so 400k of them are over the cap that 400k
+      // ASCII characters would sit well under.
+      expectRule(secret(`stringData:\n  a: ${'€'.repeat(400 * 1024)}\n`), 'secret/too-large');
+      expectRules(secret(`stringData:\n  a: ${'x'.repeat(400 * 1024)}\n`), []);
+    });
+
+    it('measures an overlapping key by its stringData value, not its data value', () => {
+      // data's own value alone decodes to a few bytes; stringData overwrites
+      // it with something large enough to be over the cap on its own.
+      const finding = expectRule(
+        secret(`data:\n  a: dGVzdA==\nstringData:\n  a: ${'x'.repeat(1200 * 1024)}\n`),
+        'secret/too-large',
+      );
+      expect(finding.path).toEqual([]);
+    });
+
+    it('does not count an overlapping key under both maps', () => {
+      // Each half sits under the cap alone; if the overlapping key were
+      // counted under both maps at once the total would clear it.
+      const half = 'x'.repeat(600 * 1024);
+      expectRules(secret(`data:\n  a: ${btoa(half)}\nstringData:\n  a: ${half}\n`), [
+        'secret/overlapping-key',
+      ]);
+    });
+  });
+
+  describe('type: kubernetes.io/tls', () => {
+    it('requires tls.crt and tls.key to both be present', () => {
+      expectRules(secret('type: kubernetes.io/tls\ndata:\n  tls.crt: dGVzdA==\n'), [
+        'secret/missing-tls-key',
+      ]);
+      expectRules(secret('type: kubernetes.io/tls\n'), ['secret/missing-tls-key']);
+    });
+
+    it('accepts an empty value, since only presence is required', () => {
+      expectRules(secret('type: kubernetes.io/tls\ndata:\n  tls.crt: ""\n  tls.key: ""\n'), []);
+    });
+  });
+
+  describe('type: kubernetes.io/basic-auth', () => {
+    it('requires at least one of username or password, non-empty', () => {
+      expectRule(secret('type: kubernetes.io/basic-auth\n'), 'secret/missing-basic-auth-key');
+    });
+
+    it('rejects both keys present but empty', () => {
+      expectRule(
+        secret('type: kubernetes.io/basic-auth\ndata:\n  username: ""\n  password: ""\n'),
+        'secret/missing-basic-auth-key',
+      );
+    });
+
+    it('accepts a username with no password', () => {
+      expectRules(secret('type: kubernetes.io/basic-auth\nstringData:\n  username: admin\n'), []);
+    });
+  });
+
+  describe('type: kubernetes.io/ssh-auth', () => {
+    it('requires a non-empty ssh-privatekey', () => {
+      expectRule(secret('type: kubernetes.io/ssh-auth\n'), 'secret/missing-ssh-key');
+    });
+
+    it('rejects an empty ssh-privatekey', () => {
+      expectRule(
+        secret('type: kubernetes.io/ssh-auth\ndata:\n  ssh-privatekey: ""\n'),
+        'secret/missing-ssh-key',
+      );
+    });
+
+    it('accepts a non-empty one', () => {
+      expectRules(secret('type: kubernetes.io/ssh-auth\ndata:\n  ssh-privatekey: dGVzdA==\n'), []);
+    });
+  });
+
+  describe('type: kubernetes.io/dockercfg', () => {
+    it('requires a non-empty .dockercfg key', () => {
+      expectRule(secret('type: kubernetes.io/dockercfg\n'), 'secret/missing-docker-config');
+    });
+
+    it('rejects a value that does not decode to a JSON object', () => {
+      const finding = expectRule(
+        secret("type: kubernetes.io/dockercfg\nstringData:\n  .dockercfg: '[1,2,3]'\n"),
+        'secret/invalid-docker-config',
+      );
+      expect(finding.path).toEqual(['data', '.dockercfg']);
+    });
+
+    it("accepts null, which Go's json.Unmarshal accepts into a map", () => {
+      expectRules(secret('type: kubernetes.io/dockercfg\nstringData:\n  .dockercfg: "null"\n'), []);
+    });
+
+    it('accepts a well-formed registry config', () => {
+      expectRules(
+        secret(
+          "type: kubernetes.io/dockercfg\nstringData:\n  .dockercfg: '{\"registry.example.com\":{\"auth\":\"dGVzdA==\"}}'\n",
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('type: kubernetes.io/dockerconfigjson', () => {
+    it('requires a non-empty .dockerconfigjson key', () => {
+      expectRule(secret('type: kubernetes.io/dockerconfigjson\n'), 'secret/missing-docker-config');
+    });
+
+    it('rejects a value that does not decode to a JSON object', () => {
+      expectRule(
+        secret('type: kubernetes.io/dockerconfigjson\nstringData:\n  .dockerconfigjson: "not json"\n'),
+        'secret/invalid-docker-config',
+      );
+    });
+
+    it('accepts a well-formed auths document', () => {
+      expectRules(
+        secret("type: kubernetes.io/dockerconfigjson\nstringData:\n  .dockerconfigjson: '{\"auths\":{}}'\n"),
+        [],
+      );
+    });
+  });
+
+  describe('type: kubernetes.io/service-account-token', () => {
+    it('requires a non-empty service-account name annotation', () => {
+      expectRule(
+        secret('type: kubernetes.io/service-account-token\n'),
+        'secret/missing-service-account-name',
+      );
+    });
+
+    it('accepts one with the annotation set', () => {
+      expectRules(
+        secret(
+          'type: kubernetes.io/service-account-token\n',
+          '  name: web-tls\n  annotations:\n    kubernetes.io/service-account.name: web\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('unknown type', () => {
+    it('warns on a near-miss of a well-known type, with a safe fix', () => {
+      const finding = expectRule(secret('type: kubernetes.io/TLS\n'), 'secret/unknown-type');
+      expect(finding.severity).toBe('warning');
+      expect(finding.fix).toEqual({
+        title: 'Change to "kubernetes.io/tls"',
+        safe: true,
+        ops: [{ op: 'set', path: ['type'], value: 'kubernetes.io/tls' }],
+      });
+    });
+
+    it('says nothing about an arbitrary third-party type', () => {
+      expectRules(secret('type: helm.sh/release.v1\n'), []);
+    });
+
+    it('says nothing about Opaque, the default', () => {
+      expectRules(secret('type: Opaque\n'), []);
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(secret('', '  name: Web_TLS\n'), 'meta/invalid-name');
+    });
+
+    it('accepts a namespace, since a Secret is namespaced', () => {
+      expectRules(secret('', '  name: web-tls\n  namespace: shop\n'), []);
     });
   });
 });
