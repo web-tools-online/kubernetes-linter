@@ -35,7 +35,10 @@
  * string maps, so below ObjectMeta it reaches nothing at all and the closure
  * grows by exactly one definition, its own. Secret is exactly as cheap and for
  * the same reason: data and stringData are plain string maps too, and type and
- * immutable are scalars, so it also adds only its own definition.
+ * immutable are scalars, so it also adds only its own definition. ResourceQuota
+ * is nearly as cheap: its hard and used maps are Quantity maps, a type the Pod
+ * closure already carries, so below ObjectMeta it adds only its own spec,
+ * status and the two scope-selector definitions.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -75,6 +78,7 @@ const ROOTS = {
   NetworkPolicy: 'io.k8s.api.networking.v1.NetworkPolicy',
   ConfigMap: 'io.k8s.api.core.v1.ConfigMap',
   Secret: 'io.k8s.api.core.v1.Secret',
+  ResourceQuota: 'io.k8s.api.core.v1.ResourceQuota',
 };
 
 /**

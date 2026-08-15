@@ -11,6 +11,7 @@ import { jobRule } from './rules/job.js';
 import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
+import { resourceQuotaRule } from './rules/resourcequota.js';
 import { secretRule } from './rules/secret.js';
 import { serviceRule } from './rules/service.js';
 import { statefulSetRule } from './rules/statefulset.js';
@@ -155,5 +156,9 @@ export const KINDS: Record<string, KindDescriptor> = {
   Secret: {
     kind: 'Secret',
     rules: [secretRule],
+  },
+  ResourceQuota: {
+    kind: 'ResourceQuota',
+    rules: [resourceQuotaRule],
   },
 };

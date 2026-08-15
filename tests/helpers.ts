@@ -632,3 +632,40 @@ export function secret(fieldsFragment: string, metadataFragment = '  name: web-t
 export function secretData(entriesFragment: string): string {
   return secret(`data:\n${entriesFragment}`);
 }
+
+/** A minimal valid ResourceQuota that individual tests mutate. */
+export const VALID_RESOURCEQUOTA = `apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: compute
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    pods: "20"
+  scopeSelector:
+    matchExpressions:
+      - scopeName: PriorityClass
+        operator: In
+        values:
+          - high
+`;
+
+/**
+ * Build a ResourceQuota from a fragment of ResourceQuotaSpec. Like
+ * `persistentVolumeClaim()` the fragment is the whole spec: a ResourceQuota has
+ * no pod template to keep consistent, and most of what it is checked for is
+ * which scopes may sit next to which resources. Fragments are indented two
+ * spaces, matching `pod()`.
+ */
+export function resourceQuota(
+  specFragment: string,
+  metadataFragment = '  name: compute\n',
+): string {
+  return `apiVersion: v1\nkind: ResourceQuota\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}
+
+/** A ResourceQuota whose `hard` map carries the given entries. */
+export function resourceQuotaHard(entriesFragment: string): string {
+  return resourceQuota(`  hard:\n${entriesFragment}`);
+}

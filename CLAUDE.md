@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -118,7 +118,8 @@ reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
-StorageClass, a NetworkPolicy, a ConfigMap, a Secret and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
+StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota and an HTTPRoute describe
+no Pod at all. Its absence is what makes `POD_RULES` skip the kind
 (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -133,7 +134,7 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
 `rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
-`rules/configmap.ts`, `rules/secret.ts` and `rules/httproute.ts`, which
+`rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts` and `rules/httproute.ts`, which
 address `spec.selector`, `spec.strategy`, `spec.updateStrategy`, `spec.completionMode`,
 `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`, `spec.accessModes`,
 `spec.capacity` and the like — fields of the object itself, not of any pod spec.
@@ -392,9 +393,28 @@ check, such as `bootstrap.kubernetes.io/token`, which a controller validates rat
 function. Nothing is version-gated: core/v1 Secret has carried `data`, `stringData`, `type` and
 `immutable` since well before the 1.25 floor.
 
+`resourcequota.ts` is the eleventh, and the kind whose rules turn almost entirely on the *keys*
+of a map rather than on fields: `spec.hard` is a `map[string]Quantity`, so layer 1 covers only
+that a value parses as a quantity, and everything else — which names may be bounded, which of
+those must be whole numbers — is the module's. The name set is narrower than a container's, so
+it is written out here rather than shared with `rules/resources.ts`: a quota counts objects
+(`pods`, `secrets`, `count/deployments.apps`) as well as compute, and spells compute three ways,
+`cpu` being shorthand for `requests.cpu`. Scopes are the other half, and they are checked in two
+places at once, since a scope reached through `spec.scopes` and one reached through
+`spec.scopeSelector.matchExpressions` are validated identically upstream: both may not pair
+`Terminating` with `NotTerminating` or `BestEffort` with `NotBestEffort` (each pair selects
+complementary sets of Pods, so together they select none), and neither may bound a resource the
+Pods it selects do not consume. Like a NetworkPolicy's `policyTypes`, `spec.scopes` is a list of
+enum strings and so cannot go in the `enums.ts` table at all; the selector's `scopeName` and
+`operator` are scalars and do, which is why the module skips a requirement whose `scopeName` it
+does not recognise — `enum/invalid-value` has already reported it. Deliberately skipped:
+`status`, whose `hard` and `used` the quota controller writes rather than the manifest. Nothing
+is version-gated: core/v1 ResourceQuota has carried all three spec fields since before the 1.25
+floor.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
-markers, unlike the hand-written Kubernetes API types the other fifteen kinds come from, where
+markers, unlike the hand-written Kubernetes API types the other sixteen kinds come from, where
 `rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
 Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
 gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
@@ -441,8 +461,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(229 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 251 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(234 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 256 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -471,7 +491,9 @@ and `IPBlock` — an eighth, `NetworkPolicyStatus`, on the 1.25-1.27 bundles onl
 dropped the field from the type in 1.28. ConfigMap and Secret are the cheapest roots of them
 all: ConfigMap's `data` and `binaryData` are plain string maps and Secret's `data` and
 `stringData` are too, so below `ObjectMeta` each reaches nothing and the closure grows by its
-own definition alone. API descriptions are kept on
+own definition alone. ResourceQuota is nearly as cheap: its `hard` and `used` maps are
+`Quantity` maps, a type the Pod closure already carries, so it adds only its own definition, its
+spec, its status and the two scope-selector definitions. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -490,7 +512,7 @@ them property-by-property would produce nonsense.
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
-  `configmap/<thing>` / `secret/<thing>` / `httproute/<thing>` for checks on
+  `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `httproute/<thing>` for checks on
   the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.

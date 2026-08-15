@@ -191,6 +191,21 @@ const ENUMS: Record<string, EnumSpec> = {
   // directly, the same way persistentvolumeclaim.ts checks accessModes.
   'NetworkPolicyPort.protocol': { values: ['TCP', 'UDP', 'SCTP'], note: 'Defaults to TCP.' },
 
+  // A ResourceQuota's own `spec.scopes` is a list of enum strings rather than
+  // a scalar, so — like a NetworkPolicy's policyTypes — it cannot go in this
+  // table and rules/resourcequota.ts checks it directly. The scope selector's
+  // two fields are scalars and do belong here.
+  'ScopedResourceSelectorRequirement.scopeName': {
+    values: [
+      'Terminating', 'NotTerminating', 'BestEffort', 'NotBestEffort', 'PriorityClass',
+      'CrossNamespacePodAffinity',
+    ],
+    note: 'Only "PriorityClass" carries a value to match against; every other scope is a property a Pod either has or does not, so it can only be paired with the "Exists" operator.',
+  },
+  'ScopedResourceSelectorRequirement.operator': {
+    values: ['In', 'NotIn', 'Exists', 'DoesNotExist'],
+  },
+
   'StatefulSetSpec.podManagementPolicy': {
     values: ['OrderedReady', 'Parallel'],
     note: 'Defaults to OrderedReady, which starts and replaces Pods one at a time, in ordinal order.',

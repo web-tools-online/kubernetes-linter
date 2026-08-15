@@ -686,4 +686,38 @@ stringData:
   token: replaced-value
 `,
   },
+  {
+    id: 'resourcequota',
+    label: 'A ResourceQuota with problems',
+    blurb:
+      'A resource name a quota cannot bound, a fractional object count, a scope that contradicts the resources beside it, and two scopes that select complementary sets of Pods.',
+    yaml: `apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: compute
+  namespace: shop
+spec:
+  hard:
+    requests.cpu: "4"
+    # Unprefixed keys are limited to what the quota system counts natively;
+    # a Deployment count is written "count/deployments.apps".
+    deployments: "10"
+    # A count of objects has to be a whole number.
+    pods: "20.5"
+    # Bounded below by a Pod-selecting scope, which cannot count Secrets.
+    secrets: "10"
+  scopes:
+    # Every Pod is one or the other, so the two together select none of them.
+    - Terminating
+    - NotTerminating
+  scopeSelector:
+    matchExpressions:
+      # Only PriorityClass has values to match against; every other scope can
+      # only be asked whether it applies.
+      - scopeName: BestEffort
+        operator: In
+        values:
+          - high
+`,
+  },
 ];
