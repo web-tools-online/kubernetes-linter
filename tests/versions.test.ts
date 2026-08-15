@@ -19,6 +19,7 @@ import {
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
+  VALID_RESOURCEQUOTA,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_STATEFULSET,
@@ -38,6 +39,7 @@ import {
   persistentVolumeClaim,
   pod,
   podWithContainer,
+  resourceQuota,
   secretData,
   service,
   statefulSet,
@@ -104,6 +106,7 @@ describe('bundled versions', () => {
         'NetworkPolicy',
         'ConfigMap',
         'Secret',
+        'ResourceQuota',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -120,6 +123,7 @@ describe('bundled versions', () => {
       expect(schema.for('NetworkPolicy')?.apiVersion, version).toBe('networking.k8s.io/v1');
       expect(schema.for('ConfigMap')?.apiVersion, version).toBe('v1');
       expect(schema.for('Secret')?.apiVersion, version).toBe('v1');
+      expect(schema.for('ResourceQuota')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -288,6 +292,28 @@ describe('bundled versions', () => {
     const yaml = secretData('  "log level": dGVzdA==\n');
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['secret/invalid-key']);
+    }
+  });
+
+  it('lints a valid ResourceQuota cleanly on every version', async () => {
+    // The sixteenth root, and nearly as cheap as ConfigMap: its hard and used
+    // maps are Quantity maps the Pod closure already carries, so it adds only
+    // its own spec, status and the two scope-selector definitions.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_RESOURCEQUOTA, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a ResourceQuota the same way on every version', async () => {
+    // core/v1 ResourceQuota has carried hard, scopes and scopeSelector since
+    // well before the 1.25 floor, so nothing in its rule module is
+    // version-gated.
+    const yaml = resourceQuota('  hard:\n    secrets: "10"\n  scopes:\n    - BestEffort\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'resourcequota/scope-not-valid-for-resource',
+      ]);
     }
   });
 

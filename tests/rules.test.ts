@@ -11,6 +11,7 @@ import {
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
+  VALID_RESOURCEQUOTA,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_STATEFULSET,
@@ -41,6 +42,8 @@ import {
   persistentVolumeClaim,
   pod,
   podWithContainer,
+  resourceQuota,
+  resourceQuotaHard,
   ruleIds,
   secret,
   secretData,
@@ -4782,6 +4785,160 @@ describe('secret', () => {
 
     it('accepts a namespace, since a Secret is namespaced', () => {
       expectRules(secret('', '  name: web-tls\n  namespace: shop\n'), []);
+    });
+  });
+});
+
+describe('ResourceQuota rules', () => {
+  it('lints a valid ResourceQuota cleanly', () => {
+    expectRules(VALID_RESOURCEQUOTA, []);
+  });
+
+  describe('hard', () => {
+    it('rejects an unprefixed name the quota system does not count', () => {
+      const finding = expectRule(
+        resourceQuotaHard('    deployments: "10"\n'),
+        'resourcequota/unknown-resource-name',
+      );
+      expect(finding.path).toEqual(['spec', 'hard', 'deployments']);
+    });
+
+    it('accepts a domain-prefixed extended resource and the generic object counter', () => {
+      expectRules(
+        resourceQuotaHard('    "count/deployments.apps": "10"\n    "nvidia.com/gpu": "4"\n'),
+        [],
+      );
+    });
+
+    it('rejects a key that is not a qualified name', () => {
+      expectRule(resourceQuotaHard('    "not a name": "1"\n'), 'resourcequota/invalid-resource-name');
+    });
+
+    it('rejects a negative limit', () => {
+      expectRule(resourceQuotaHard('    pods: "-1"\n'), 'resourcequota/negative-quantity');
+    });
+
+    it('rejects a fractional count of objects', () => {
+      expectRule(resourceQuotaHard('    pods: "20.5"\n'), 'resourcequota/fractional-count');
+    });
+
+    it('accepts a fractional amount of compute, which is not a count', () => {
+      expectRules(resourceQuotaHard('    requests.cpu: "1.5"\n    limits.memory: 512Mi\n'), []);
+    });
+  });
+
+  describe('scopes', () => {
+    it('rejects an unrecognised scope, with a safe fix', () => {
+      const finding = expectRule(
+        resourceQuota('  scopes:\n    - besteffort\n'),
+        'resourcequota/unknown-scope',
+      );
+      expect(finding.fix).toEqual({
+        title: 'Change to "BestEffort"',
+        safe: true,
+        ops: [{ op: 'set', path: ['spec', 'scopes', 0], value: 'BestEffort' }],
+      });
+    });
+
+    it('rejects two scopes that select complementary sets of Pods', () => {
+      expectRule(
+        resourceQuota('  scopes:\n    - Terminating\n    - NotTerminating\n'),
+        'resourcequota/conflicting-scopes',
+      );
+    });
+
+    it('rejects a Pod-selecting scope beside a resource a Pod does not consume', () => {
+      expectRule(
+        resourceQuota('  hard:\n    secrets: "10"\n  scopes:\n    - NotBestEffort\n'),
+        'resourcequota/scope-not-valid-for-resource',
+      );
+    });
+
+    it('rejects compute beside BestEffort, which can only count Pods', () => {
+      expectRule(
+        resourceQuota('  hard:\n    requests.cpu: "4"\n  scopes:\n    - BestEffort\n'),
+        'resourcequota/scope-not-valid-for-resource',
+      );
+    });
+
+    it('says nothing about compute beside a scope that allows it', () => {
+      expectRules(
+        resourceQuota('  hard:\n    requests.cpu: "4"\n    pods: "10"\n  scopes:\n    - Terminating\n'),
+        [],
+      );
+    });
+
+    it('says nothing about an extended resource beside any scope', () => {
+      expectRules(
+        resourceQuota('  hard:\n    "nvidia.com/gpu": "4"\n  scopes:\n    - BestEffort\n'),
+        [],
+      );
+    });
+  });
+
+  describe('scopeSelector', () => {
+    const expressions = (fragment: string) =>
+      resourceQuota(`  scopeSelector:\n    matchExpressions:\n${fragment}`);
+
+    it('rejects an operator other than Exists on a scope with no values to match', () => {
+      const finding = expectRule(
+        expressions('      - scopeName: BestEffort\n        operator: In\n        values:\n          - high\n'),
+        'resourcequota/scope-operator',
+      );
+      expect(finding.path).toEqual([
+        'spec', 'scopeSelector', 'matchExpressions', 0, 'operator',
+      ]);
+    });
+
+    it('accepts In on PriorityClass, the one scope that carries a value', () => {
+      expectRules(
+        expressions('      - scopeName: PriorityClass\n        operator: In\n        values:\n          - high\n'),
+        [],
+      );
+    });
+
+    it('requires values under In', () => {
+      expectRule(
+        expressions('      - scopeName: PriorityClass\n        operator: In\n'),
+        'resourcequota/missing-scope-values',
+      );
+    });
+
+    it('forbids values under Exists', () => {
+      expectRule(
+        expressions('      - scopeName: PriorityClass\n        operator: Exists\n        values:\n          - high\n'),
+        'resourcequota/unexpected-scope-values',
+      );
+    });
+
+    it('leaves an unrecognised scopeName to the enum rule', () => {
+      expectRules(
+        expressions('      - scopeName: BestEfort\n        operator: Exists\n'),
+        ['enum/invalid-value'],
+      );
+    });
+
+    it('rejects conflicting scopes across two requirements', () => {
+      expectRule(
+        expressions(
+          '      - scopeName: Terminating\n        operator: Exists\n' +
+            '      - scopeName: NotTerminating\n        operator: Exists\n',
+        ),
+        'resourcequota/conflicting-scopes',
+      );
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(resourceQuota('  hard:\n    pods: "1"\n', '  name: Compute_Quota\n'), 'meta/invalid-name');
+    });
+
+    it('accepts a namespace, since a ResourceQuota is namespaced', () => {
+      expectRules(
+        resourceQuota('  hard:\n    pods: "1"\n', '  name: compute\n  namespace: shop\n'),
+        [],
+      );
     });
   });
 });

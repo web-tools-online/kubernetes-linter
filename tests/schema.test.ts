@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret and HTTPRoute',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota and HTTPRoute',
       );
     });
 
@@ -382,6 +382,7 @@ describe('field descriptions', () => {
       'NetworkPolicy',
       'ConfigMap',
       'Secret',
+      'ResourceQuota',
       'HTTPRoute',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();
