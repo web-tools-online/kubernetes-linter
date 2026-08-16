@@ -38,7 +38,9 @@
  * immutable are scalars, so it also adds only its own definition. ResourceQuota
  * is nearly as cheap: its hard and used maps are Quantity maps, a type the Pod
  * closure already carries, so below ObjectMeta it adds only its own spec,
- * status and the two scope-selector definitions.
+ * status and the two scope-selector definitions. LimitRange is cheaper still,
+ * and for the same reason: its five constraint maps are Quantity maps too, so
+ * it adds only its own definition, its spec and LimitRangeItem.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -79,6 +81,7 @@ const ROOTS = {
   ConfigMap: 'io.k8s.api.core.v1.ConfigMap',
   Secret: 'io.k8s.api.core.v1.Secret',
   ResourceQuota: 'io.k8s.api.core.v1.ResourceQuota',
+  LimitRange: 'io.k8s.api.core.v1.LimitRange',
 };
 
 /**

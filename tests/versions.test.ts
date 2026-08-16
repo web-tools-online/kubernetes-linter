@@ -16,6 +16,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_LIMITRANGE,
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
@@ -34,6 +35,7 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  limitRange,
   networkPolicy,
   persistentVolume,
   persistentVolumeClaim,
@@ -107,6 +109,7 @@ describe('bundled versions', () => {
         'ConfigMap',
         'Secret',
         'ResourceQuota',
+        'LimitRange',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -124,6 +127,7 @@ describe('bundled versions', () => {
       expect(schema.for('ConfigMap')?.apiVersion, version).toBe('v1');
       expect(schema.for('Secret')?.apiVersion, version).toBe('v1');
       expect(schema.for('ResourceQuota')?.apiVersion, version).toBe('v1');
+      expect(schema.for('LimitRange')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -313,6 +317,27 @@ describe('bundled versions', () => {
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual([
         'resourcequota/scope-not-valid-for-resource',
+      ]);
+    }
+  });
+
+  it('lints a valid LimitRange cleanly on every version', async () => {
+    // The seventeenth root, and the cheapest since ConfigMap: its five
+    // constraint maps are Quantity maps the Pod closure already carries, so it
+    // adds only its own definition, its spec and LimitRangeItem.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_LIMITRANGE, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a LimitRange the same way on every version', async () => {
+    // core/v1 LimitRange has been unchanged since well before the 1.25 floor,
+    // so nothing in its rule module is version-gated.
+    const yaml = limitRange('  limits:\n    - type: Pod\n      default:\n        cpu: "1"\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'limitrange/default-not-allowed',
       ]);
     }
   });

@@ -720,4 +720,38 @@ spec:
           - high
 `,
   },
+  {
+    id: 'limitrange',
+    label: 'A LimitRange with problems',
+    blurb:
+      'A default on a Pod-typed entry, a min above its own max, a ratio the min and max have already ruled out, and a PersistentVolumeClaim entry that bounds no storage.',
+    yaml: `apiVersion: v1
+kind: LimitRange
+metadata:
+  name: compute
+  namespace: shop
+spec:
+  limits:
+    - type: Pod
+      max:
+        cpu: "4"
+      # A Pod entry bounds the total across the containers; defaults are
+      # filled in per container, so there is nothing here to apply them to.
+      defaultRequest:
+        cpu: 500m
+    - type: Container
+      min:
+        # Above the max below it, so no container can satisfy both.
+        memory: 2Gi
+      max:
+        memory: 1Gi
+      maxLimitRequestRatio:
+        # The min and max above already cap the spread at 1Gi/2Gi.
+        memory: "4"
+    - type: PersistentVolumeClaim
+      # Size is all a claim can be bounded by, and neither end is set.
+      max:
+        cpu: "1"
+`,
+  },
 ];

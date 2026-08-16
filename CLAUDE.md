@@ -96,7 +96,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -118,8 +118,8 @@ reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
-StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota and an HTTPRoute describe
-no Pod at all. Its absence is what makes `POD_RULES` skip the kind
+StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange and an
+HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
 (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -134,10 +134,11 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
 `rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
-`rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts` and `rules/httproute.ts`, which
-address `spec.selector`, `spec.strategy`, `spec.updateStrategy`, `spec.completionMode`,
-`spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`, `spec.accessModes`,
-`spec.capacity` and the like — fields of the object itself, not of any pod spec.
+`rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts` and
+`rules/httproute.ts`, which address `spec.selector`, `spec.strategy`, `spec.updateStrategy`,
+`spec.completionMode`, `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`,
+`spec.accessModes`, `spec.capacity` and the like — fields of the object itself, not of any pod
+spec.
 `storageclass.ts`, `configmap.ts` and `secret.ts` go one step further and address `ctx.doc`
 directly: none of the three has a `spec` at all, so `provisioner`, `data` and the rest are
 document-root fields.
@@ -150,11 +151,12 @@ is kind-correct for free.
 Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem wherever it lives —
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
-`storageclass/*` / `networkpolicy/*` / `configmap/*` / `secret/*` / `httproute/*` for checks on
-the object itself. The two document-level rules are named for what they check rather than for a
-kind, since they run for every kind including one with no Pod: `meta/*` in `metadata.ts` and
-`enum/*` in `enums.ts`. `Schema` is per version and holds every root; `Schema.for(kind)`
-returns the `KindSchema` view that both lint layers actually use.
+`storageclass/*` / `networkpolicy/*` / `configmap/*` / `secret/*` / `resourcequota/*` /
+`limitrange/*` / `httproute/*` for checks on the object itself. The two document-level rules
+are named for what they check rather than for a kind, since they run for every kind including
+one with no Pod: `meta/*` in `metadata.ts` and `enum/*` in `enums.ts`. `Schema` is per version
+and holds every root; `Schema.for(kind)` returns the `KindSchema` view that both lint layers
+actually use.
 
 Each kind keeps its **own** rule module rather than sharing one: `deployment.ts`,
 `statefulset.ts`, `daemonset.ts` and `job.ts` overlap on the selector and template checks, but
@@ -412,9 +414,36 @@ does not recognise — `enum/invalid-value` has already reported it. Deliberatel
 is version-gated: core/v1 ResourceQuota has carried all three spec fields since before the 1.25
 floor.
 
+`limitrange.ts` is the twelfth, and the closest neighbour `resourcequota.ts` has — both bound
+resources by name, and both are checked almost entirely on the *keys* of a map rather than on
+fields. What layer 1 covers here is more than it covers for a quota: `spec.limits` is required
+and so is each item's `type`, and every one of the five constraint maps is a
+`map[string]Quantity` whose values it checks parse. `LimitRangeItem.type` is a plain scalar
+enum and lives in `rules/enums.ts` — the one entry in that table for a field
+`ValidateLimitRange` does *not* itself check, since an unrecognised type is stored rather than
+rejected and simply never matches anything the LimitRanger admission plugin looks for, which
+makes it a misconfiguration rather than an apiserver error. What is left to the module is what
+OpenAPI cannot express: the same `type` twice, the `default`/`defaultRequest` maps a `Pod`-typed
+item may not carry at all (a Pod entry bounds the total across its containers, and defaults are
+filled in per container), the storage bound a `PersistentVolumeClaim`-typed one must carry, the
+resource names that may be bounded, and the six orderings one resource's constraints must
+satisfy — in effect `min <= defaultRequest <= default <= max`, spelled out as the six pairs
+upstream compares since any one can be violated alone, each reported on the field upstream
+blames rather than on the greater of the two. Its resource-name set is *not* the quota's:
+`validateResourceName` checks an unprefixed name against `standardResources`, which is
+`standardQuotaResources` plus bare `storage` — a LimitRange bounds a claim's size directly where
+a quota only ever sums it as `requests.storage` — so the list is written out here rather than
+shared, exactly as `resourcequota.ts` writes its own out rather than sharing with
+`rules/resources.ts`. The last check is the one that is not about ordering at all: a resource
+that cannot be overcommitted (an extended resource, or hugepages) is handed out whole, so its
+`default` and `defaultRequest` have to be *equal* rather than merely ordered. Deliberately
+skipped: a negative quantity, which upstream does not check for here — the inverse of a
+ResourceQuota, whose ceilings it does. Nothing is version-gated: core/v1 LimitRange has been
+unchanged since well before the 1.25 floor.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
-markers, unlike the hand-written Kubernetes API types the other sixteen kinds come from, where
+markers, unlike the hand-written Kubernetes API types the other seventeen kinds come from, where
 `rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
 Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
 gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
@@ -461,8 +490,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(234 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 256 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(237 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 259 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -493,7 +522,9 @@ all: ConfigMap's `data` and `binaryData` are plain string maps and Secret's `dat
 `stringData` are too, so below `ObjectMeta` each reaches nothing and the closure grows by its
 own definition alone. ResourceQuota is nearly as cheap: its `hard` and `used` maps are
 `Quantity` maps, a type the Pod closure already carries, so it adds only its own definition, its
-spec, its status and the two scope-selector definitions. API descriptions are kept on
+spec, its status and the two scope-selector definitions. LimitRange is cheaper still, and for
+the same reason: its five constraint maps are `Quantity` maps too, so it adds only its own
+definition, its spec and `LimitRangeItem`. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -512,8 +543,8 @@ them property-by-property would produce nonsense.
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
-  `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `httproute/<thing>` for checks on
-  the object itself; the
+  `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
+  `httproute/<thing>` for checks on the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its
