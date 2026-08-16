@@ -206,6 +206,15 @@ const ENUMS: Record<string, EnumSpec> = {
     values: ['In', 'NotIn', 'Exists', 'DoesNotExist'],
   },
 
+  // ValidateLimitRange does not itself check this against the three LimitType
+  // constants, so an unrecognised type is stored rather than rejected — but the
+  // LimitRanger admission plugin only ever looks for these three, so anything
+  // else is an entry that silently constrains nothing.
+  'LimitRangeItem.type': {
+    values: ['Pod', 'Container', 'PersistentVolumeClaim'],
+    note: 'A "Pod" entry bounds the total across a Pod\'s containers, a "Container" entry each container on its own.',
+  },
+
   'StatefulSetSpec.podManagementPolicy': {
     values: ['OrderedReady', 'Parallel'],
     note: 'Defaults to OrderedReady, which starts and replaces Pods one at a time, in ordinal order.',

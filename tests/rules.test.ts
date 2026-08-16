@@ -8,6 +8,7 @@ import {
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
   VALID_JOB,
+  VALID_LIMITRANGE,
   VALID_NETWORKPOLICY,
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
@@ -36,6 +37,8 @@ import {
   ingressWithPaths,
   job,
   jobWithPodSpec,
+  limitRange,
+  limitRangeItem,
   networkPolicy,
   networkPolicyWithPeer,
   persistentVolume,
@@ -4937,6 +4940,229 @@ describe('ResourceQuota rules', () => {
     it('accepts a namespace, since a ResourceQuota is namespaced', () => {
       expectRules(
         resourceQuota('  hard:\n    pods: "1"\n', '  name: compute\n  namespace: shop\n'),
+        [],
+      );
+    });
+  });
+});
+
+describe('LimitRange rules', () => {
+  it('lints a valid LimitRange cleanly', () => {
+    expectRules(VALID_LIMITRANGE, []);
+  });
+
+  describe('limits entries', () => {
+    it('rejects a second entry for the same type', () => {
+      const finding = expectRule(
+        limitRange('  limits:\n    - type: Container\n    - type: Container\n'),
+        'limitrange/duplicate-type',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 1, 'type']);
+    });
+
+    it('accepts one entry per type', () => {
+      expectRules(
+        limitRange(
+          '  limits:\n    - type: Container\n    - type: Pod\n' +
+            '    - type: PersistentVolumeClaim\n      min:\n        storage: 1Gi\n',
+        ),
+        [],
+      );
+    });
+
+    it('leaves an unrecognised type to the enum rule', () => {
+      expectRules(limitRange('  limits:\n    - type: container\n'), ['enum/invalid-value']);
+    });
+
+    it('forbids a default on a Pod entry, which has nothing to default', () => {
+      const finding = expectRule(
+        limitRangeItem('      default:\n        cpu: "1"\n', 'Pod'),
+        'limitrange/default-not-allowed',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'default']);
+    });
+
+    it('forbids a defaultRequest on a Pod entry too', () => {
+      expectRule(
+        limitRangeItem('      defaultRequest:\n        cpu: "1"\n', 'Pod'),
+        'limitrange/default-not-allowed',
+      );
+    });
+
+    it('requires a storage bound on a PersistentVolumeClaim entry', () => {
+      expectRule(
+        limitRangeItem('      max:\n        cpu: "1"\n', 'PersistentVolumeClaim'),
+        'limitrange/missing-storage-constraint',
+      );
+    });
+
+    it('accepts a PersistentVolumeClaim entry bounding either end of storage', () => {
+      expectRules(limitRangeItem('      max:\n        storage: 10Gi\n', 'PersistentVolumeClaim'), []);
+    });
+  });
+
+  describe('resource names', () => {
+    it('rejects an unprefixed name the API does not define, with a safe fix', () => {
+      const finding = expectRule(
+        limitRangeItem('      max:\n        memroy: 1Gi\n'),
+        'limitrange/unknown-resource-name',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'max', 'memroy']);
+      expect(finding.fix).toEqual({
+        title: 'Rename to "memory"',
+        safe: true,
+        ops: [{ op: 'rename', path: ['spec', 'limits', 0, 'max', 'memroy'], to: 'memory' }],
+      });
+    });
+
+    it('accepts bare storage, which a quota may not bound', () => {
+      expectRules(limitRangeItem('      max:\n        storage: 10Gi\n', 'PersistentVolumeClaim'), []);
+    });
+
+    it('accepts a domain-prefixed extended resource and a hugepages size', () => {
+      expectRules(
+        limitRangeItem('      max:\n        "nvidia.com/gpu": "4"\n        hugepages-2Mi: 100Mi\n'),
+        [],
+      );
+    });
+
+    it('rejects a key that is not a qualified name', () => {
+      expectRule(
+        limitRangeItem('      min:\n        "not a name": "1"\n'),
+        'limitrange/invalid-resource-name',
+      );
+    });
+
+    it('does not read the keys of a Pod entry\'s defaults, which are forbidden outright', () => {
+      expectRules(limitRangeItem('      default:\n        memroy: 1Gi\n', 'Pod'), [
+        'limitrange/default-not-allowed',
+      ]);
+    });
+  });
+
+  describe('consistency', () => {
+    it('rejects a min above its own max', () => {
+      const finding = expectRule(
+        limitRangeItem('      min:\n        memory: 2Gi\n      max:\n        memory: 1Gi\n'),
+        'limitrange/conflicting-constraints',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'min', 'memory']);
+    });
+
+    it('rejects a defaultRequest below the min', () => {
+      const finding = expectRule(
+        limitRangeItem('      min:\n        cpu: 500m\n      defaultRequest:\n        cpu: 100m\n'),
+        'limitrange/conflicting-constraints',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'defaultRequest', 'cpu']);
+    });
+
+    it('rejects a default above the max', () => {
+      const finding = expectRule(
+        limitRangeItem('      max:\n        cpu: "1"\n      default:\n        cpu: "2"\n'),
+        'limitrange/conflicting-constraints',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'default', 'cpu']);
+    });
+
+    it('rejects a defaultRequest above its own default', () => {
+      expectRule(
+        limitRangeItem('      default:\n        cpu: 100m\n      defaultRequest:\n        cpu: 200m\n'),
+        'limitrange/conflicting-constraints',
+      );
+    });
+
+    it('says nothing when the four constraints are ordered', () => {
+      expectRules(
+        limitRangeItem(
+          '      min:\n        cpu: 100m\n      defaultRequest:\n        cpu: 200m\n' +
+            '      default:\n        cpu: 500m\n      max:\n        cpu: "1"\n',
+        ),
+        [],
+      );
+    });
+
+    it('compares each resource on its own', () => {
+      expectRules(
+        limitRangeItem('      min:\n        cpu: 100m\n        memory: 64Mi\n      max:\n        cpu: "1"\n'),
+        [],
+      );
+    });
+  });
+
+  describe('maxLimitRequestRatio', () => {
+    it('rejects a ratio below 1', () => {
+      const finding = expectRule(
+        limitRangeItem('      maxLimitRequestRatio:\n        cpu: "0.5"\n'),
+        'limitrange/ratio-below-one',
+      );
+      expect(finding.path).toEqual(['spec', 'limits', 0, 'maxLimitRequestRatio', 'cpu']);
+    });
+
+    it('rejects a ratio wider than the min and max already allow', () => {
+      expectRule(
+        limitRangeItem(
+          '      min:\n        cpu: 500m\n      max:\n        cpu: "1"\n' +
+            '      maxLimitRequestRatio:\n        cpu: "4"\n',
+        ),
+        'limitrange/ratio-above-max-min',
+      );
+    });
+
+    it('accepts a ratio the min and max leave room for', () => {
+      expectRules(
+        limitRangeItem(
+          '      min:\n        cpu: 250m\n      max:\n        cpu: "1"\n' +
+            '      maxLimitRequestRatio:\n        cpu: "4"\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('overcommit', () => {
+    it('requires the two defaults to agree for an extended resource', () => {
+      const finding = expectRule(
+        limitRangeItem(
+          '      default:\n        "nvidia.com/gpu": "2"\n' +
+            '      defaultRequest:\n        "nvidia.com/gpu": "1"\n',
+        ),
+        'limitrange/overcommit-not-allowed',
+      );
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['spec', 'limits', 0, 'defaultRequest', 'nvidia.com/gpu'], value: '2' },
+      ]);
+    });
+
+    it('requires them to agree for hugepages too', () => {
+      expectRule(
+        limitRangeItem(
+          '      default:\n        hugepages-2Mi: 100Mi\n' +
+            '      defaultRequest:\n        hugepages-2Mi: 50Mi\n',
+        ),
+        'limitrange/overcommit-not-allowed',
+      );
+    });
+
+    it('allows them to differ for cpu, which can be overcommitted', () => {
+      expectRules(
+        limitRangeItem('      default:\n        cpu: "1"\n      defaultRequest:\n        cpu: 500m\n'),
+        [],
+      );
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(
+        limitRange('  limits:\n    - type: Container\n', '  name: Compute_Limits\n'),
+        'meta/invalid-name',
+      );
+    });
+
+    it('accepts a namespace, since a LimitRange is namespaced', () => {
+      expectRules(
+        limitRange('  limits:\n    - type: Container\n', '  name: compute\n  namespace: shop\n'),
         [],
       );
     });

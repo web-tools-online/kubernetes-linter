@@ -669,3 +669,45 @@ export function resourceQuota(
 export function resourceQuotaHard(entriesFragment: string): string {
   return resourceQuota(`  hard:\n${entriesFragment}`);
 }
+
+/** A minimal valid LimitRange that individual tests mutate. */
+export const VALID_LIMITRANGE = `apiVersion: v1
+kind: LimitRange
+metadata:
+  name: compute
+spec:
+  limits:
+    - type: Container
+      min:
+        cpu: 100m
+        memory: 64Mi
+      max:
+        cpu: "2"
+        memory: 1Gi
+      defaultRequest:
+        cpu: 200m
+        memory: 128Mi
+      default:
+        cpu: "1"
+        memory: 512Mi
+      maxLimitRequestRatio:
+        cpu: "4"
+`;
+
+/**
+ * Build a LimitRange from a fragment of LimitRangeSpec. Like `resourceQuota()`
+ * the fragment is the whole spec: a LimitRange has no pod template, and what it
+ * is checked for is which constraints may sit beside which. Fragments are
+ * indented two spaces, matching `pod()`.
+ */
+export function limitRange(
+  specFragment: string,
+  metadataFragment = '  name: compute\n',
+): string {
+  return `apiVersion: v1\nkind: LimitRange\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}
+
+/** A LimitRange carrying one `spec.limits` entry, built from its fields. */
+export function limitRangeItem(fieldsFragment: string, type = 'Container'): string {
+  return limitRange(`  limits:\n    - type: ${type}\n${fieldsFragment}`);
+}

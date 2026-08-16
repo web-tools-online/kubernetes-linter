@@ -8,6 +8,7 @@ import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
 import { jobRule } from './rules/job.js';
+import { limitRangeRule } from './rules/limitrange.js';
 import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
@@ -160,5 +161,9 @@ export const KINDS: Record<string, KindDescriptor> = {
   ResourceQuota: {
     kind: 'ResourceQuota',
     rules: [resourceQuotaRule],
+  },
+  LimitRange: {
+    kind: 'LimitRange',
+    rules: [limitRangeRule],
   },
 };
