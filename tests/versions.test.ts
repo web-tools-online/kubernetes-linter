@@ -23,6 +23,7 @@ import {
   VALID_RESOURCEQUOTA,
   VALID_SECRET,
   VALID_SERVICE,
+  VALID_SERVICE_ACCOUNT,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
   configMapData,
@@ -44,6 +45,8 @@ import {
   resourceQuota,
   secretData,
   service,
+  serviceAccountEnforcing,
+  serviceAccountSecrets,
   statefulSet,
   statefulSetWithPodSpec,
   storageClassWith,
@@ -110,6 +113,7 @@ describe('bundled versions', () => {
         'Secret',
         'ResourceQuota',
         'LimitRange',
+        'ServiceAccount',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -128,6 +132,7 @@ describe('bundled versions', () => {
       expect(schema.for('Secret')?.apiVersion, version).toBe('v1');
       expect(schema.for('ResourceQuota')?.apiVersion, version).toBe('v1');
       expect(schema.for('LimitRange')?.apiVersion, version).toBe('v1');
+      expect(schema.for('ServiceAccount')?.apiVersion, version).toBe('v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -339,6 +344,56 @@ describe('bundled versions', () => {
       expect(await ruleIdsAt(version, yaml), version).toEqual([
         'limitrange/default-not-allowed',
       ]);
+    }
+  });
+
+  it('lints a valid ServiceAccount cleanly on every version', async () => {
+    // The eighteenth root and the cheapest of the lot: both reference types it
+    // needs are already in the closure — ObjectReference through a
+    // PersistentVolume's claimRef, LocalObjectReference through a PodSpec's own
+    // imagePullSecrets — so it adds its own definition and nothing else.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_SERVICE_ACCOUNT, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a ServiceAccount the same way on every version', async () => {
+    // Nothing in the module's own reference checks is version-gated: core/v1
+    // ServiceAccount has carried all three fields since before the 1.25 floor.
+    const yaml = serviceAccountSecrets('  - name: build-token\n    namespace: shared\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'serviceaccount/ignored-secret-field',
+      ]);
+    }
+  });
+
+  it('reports the enforce-mountable-secrets annotation as deprecated from 1.32 only', async () => {
+    // The one version-conditional check `ctx.supports()` cannot express, since
+    // an annotation is not a schema field: the apiserver began returning a
+    // deprecation warning for it in 1.32, and on 1.25-1.31 the mechanism is
+    // current, so saying anything there would be wrong rather than early.
+    const yaml = serviceAccountEnforcing('"true"');
+    for (const version of AVAILABLE_VERSIONS) {
+      const expected = Number(version.split('.')[1]) >= 32;
+      expect(await ruleIdsAt(version, yaml), version).toEqual(
+        expected ? ['serviceaccount/deprecated-enforce-mountable-secrets'] : [],
+      );
+    }
+  });
+
+  it('leaves duplicate secrets entries to layer 1, which only describes them from 1.30', async () => {
+    // Upstream's own generated OpenAPI gained x-kubernetes-list-type: map on
+    // ServiceAccount.secrets in 1.30; before that it says nothing about the
+    // list, so neither does the linter. The module deliberately does not fill
+    // the gap, since doing so would double-report on 1.30 and up.
+    const yaml = serviceAccountSecrets('  - name: build-token\n  - name: build-token\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      const described = Number(version.split('.')[1]) >= 30;
+      expect(await ruleIdsAt(version, yaml), version).toEqual(
+        described ? ['schema/duplicate-list-entry'] : [],
+      );
     }
   });
 

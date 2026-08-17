@@ -754,4 +754,31 @@ spec:
         cpu: "1"
 `,
   },
+  {
+    id: 'serviceaccount',
+    label: 'A ServiceAccount with problems',
+    blurb:
+      'A secret reference reaching for another namespace, a name no Secret could have, the same pull secret twice, and an annotation that reads as "off" rather than as the "true" it was meant to say.',
+    yaml: `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: build-runner
+  namespace: ci
+  annotations:
+    # Parsed with Go's ParseBool, whose error is thrown away — so anything it
+    # cannot read leaves every Secret in the namespace mountable.
+    kubernetes.io/enforce-mountable-secrets: "yes"
+secrets:
+  # Only the name survives: the apiserver rewrites each entry to {name} before
+  # storing it, so a namespace here is dropped rather than honoured.
+  - name: registry-token
+    namespace: shared
+  - name: Build_Cache
+imagePullSecrets:
+  - name: registry-credentials
+  # Already listed above; the kubelet collects these into a set.
+  - name: registry-credentials
+automountServiceAccountToken: false
+`,
+  },
 ];
