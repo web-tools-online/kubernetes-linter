@@ -711,3 +711,45 @@ export function limitRange(
 export function limitRangeItem(fieldsFragment: string, type = 'Container'): string {
   return limitRange(`  limits:\n    - type: ${type}\n${fieldsFragment}`);
 }
+
+/** A minimal valid ServiceAccount that individual tests mutate. */
+export const VALID_SERVICE_ACCOUNT = `apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: build-runner
+secrets:
+  - name: build-token
+imagePullSecrets:
+  - name: registry-credentials
+automountServiceAccountToken: false
+`;
+
+/**
+ * Build a ServiceAccount from a fragment of its top-level fields. Like
+ * `configMap()` and `secret()` the fragment is not a spec — a ServiceAccount
+ * has none, so secrets, imagePullSecrets and automountServiceAccountToken sit
+ * directly under the document and the fragment is indented zero spaces.
+ */
+export function serviceAccount(
+  fieldsFragment: string,
+  metadataFragment = '  name: build-runner\n',
+): string {
+  return `apiVersion: v1\nkind: ServiceAccount\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/** A ServiceAccount whose `secrets` list carries the given entries. */
+export function serviceAccountSecrets(entriesFragment: string): string {
+  return serviceAccount(`secrets:\n${entriesFragment}`);
+}
+
+/**
+ * A ServiceAccount carrying the enforce-mountable-secrets annotation. The
+ * value is written into `metadata.annotations`, which is where both checks on
+ * it look.
+ */
+export function serviceAccountEnforcing(value: string): string {
+  return serviceAccount(
+    'secrets:\n  - name: build-token\n',
+    `  name: build-runner\n  annotations:\n    kubernetes.io/enforce-mountable-secrets: ${value}\n`,
+  );
+}

@@ -15,6 +15,7 @@ import {
   VALID_RESOURCEQUOTA,
   VALID_SECRET,
   VALID_SERVICE,
+  VALID_SERVICE_ACCOUNT,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
   configMap,
@@ -28,6 +29,7 @@ import {
   expectNoRule,
   expectRule,
   expectRules,
+  findings,
   httpRoute,
   httpRouteWithRule,
   ingress,
@@ -51,6 +53,9 @@ import {
   secret,
   secretData,
   service,
+  serviceAccount,
+  serviceAccountEnforcing,
+  serviceAccountSecrets,
   statefulSet,
   statefulSetWithPodSpec,
   storageClass,
@@ -5165,6 +5170,181 @@ describe('LimitRange rules', () => {
         limitRange('  limits:\n    - type: Container\n', '  name: compute\n  namespace: shop\n'),
         [],
       );
+    });
+  });
+});
+
+describe('ServiceAccount rules', () => {
+  it('lints a valid ServiceAccount cleanly', () => {
+    expectRules(VALID_SERVICE_ACCOUNT, []);
+  });
+
+  describe('secret references', () => {
+    it('reports a namespace, which the apiserver discards', () => {
+      const finding = expectRule(
+        serviceAccountSecrets('  - name: build-token\n    namespace: shared\n'),
+        'serviceaccount/ignored-secret-field',
+      );
+      expect(finding.path).toEqual(['secrets', 0, 'namespace']);
+      expect(finding.severity).toBe('warning');
+      expect(finding.message).toContain('its own namespace');
+    });
+
+    it('reports every other ObjectReference field the same way', () => {
+      const finding = expectRule(
+        serviceAccountSecrets('  - name: build-token\n    kind: Secret\n    uid: abc-123\n'),
+        'serviceaccount/ignored-secret-field',
+      );
+      // Both fields are dropped, so both are reported rather than only the first.
+      expect(
+        findings(serviceAccountSecrets('  - name: build-token\n    kind: Secret\n    uid: abc-123\n'))
+          .filter((entry) => entry.ruleId === 'serviceaccount/ignored-secret-field')
+          .map((entry) => entry.path),
+      ).toEqual([
+        ['secrets', 0, 'kind'],
+        ['secrets', 0, 'uid'],
+      ]);
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('says nothing about a bare name', () => {
+      expectRules(serviceAccountSecrets('  - name: build-token\n'), []);
+    });
+
+    it('reports an entry naming no Secret', () => {
+      const finding = expectRule(
+        serviceAccountSecrets('  - namespace: shared\n'),
+        'serviceaccount/missing-secret-name',
+      );
+      expect(finding.path).toEqual(['secrets', 0]);
+    });
+
+    it('reports an empty name on the name itself', () => {
+      const finding = expectRule(
+        serviceAccountSecrets('  - name: ""\n'),
+        'serviceaccount/missing-secret-name',
+      );
+      expect(finding.path).toEqual(['secrets', 0, 'name']);
+    });
+
+    it('reports a name no Secret could have', () => {
+      const finding = expectRule(
+        serviceAccountSecrets('  - name: Build_Token\n'),
+        'serviceaccount/invalid-secret-name',
+      );
+      expect(finding.path).toEqual(['secrets', 0, 'name']);
+      expect(finding.fix?.safe).toBe(false);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['secrets', 0, 'name'], value: 'build-token' },
+      ]);
+    });
+
+    it('leaves duplicate secrets to the schema layer, which owns that list', () => {
+      // `secrets` is an x-kubernetes-list-type: map keyed by name from 1.30 on,
+      // so layer 1 reports the duplicate and this module deliberately does not.
+      const ids = ruleIds(serviceAccountSecrets('  - name: build-token\n  - name: build-token\n'));
+      expect(ids).toContain('schema/duplicate-list-entry');
+      expect(ids).not.toContain('serviceaccount/duplicate-image-pull-secret');
+    });
+  });
+
+  describe('imagePullSecrets', () => {
+    it('reports the same Secret listed twice', () => {
+      const finding = expectRule(
+        serviceAccount('imagePullSecrets:\n  - name: registry\n  - name: registry\n'),
+        'serviceaccount/duplicate-image-pull-secret',
+      );
+      expect(finding.path).toEqual(['imagePullSecrets', 1, 'name']);
+      expect(finding.message).toContain('entry 1');
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([{ op: 'delete', path: ['imagePullSecrets', 1] }]);
+    });
+
+    it('says nothing about two different pull secrets', () => {
+      expectRules(serviceAccount('imagePullSecrets:\n  - name: registry\n  - name: mirror\n'), []);
+    });
+
+    it('checks the name the same way it checks a secrets entry', () => {
+      const finding = expectRule(
+        serviceAccount('imagePullSecrets:\n  - name: Registry_Creds\n'),
+        'serviceaccount/invalid-secret-name',
+      );
+      expect(finding.path).toEqual(['imagePullSecrets', 0, 'name']);
+    });
+
+    it('reports an entry naming nothing', () => {
+      expectRule(serviceAccount('imagePullSecrets:\n  - {}\n'), 'serviceaccount/missing-secret-name');
+    });
+  });
+
+  describe('enforce-mountable-secrets annotation', () => {
+    it('says nothing about a value ParseBool accepts', () => {
+      for (const value of ['"true"', '"false"', '"T"', '"1"', '"FALSE"']) {
+        expectNoRule(serviceAccountEnforcing(value), 'serviceaccount/invalid-enforce-mountable-secrets');
+      }
+    });
+
+    it('reports a value that reads as off rather than as the true it meant', () => {
+      const finding = expectRule(
+        serviceAccountEnforcing('"yes"'),
+        'serviceaccount/invalid-enforce-mountable-secrets',
+      );
+      expect(finding.path).toEqual([
+        'metadata',
+        'annotations',
+        'kubernetes.io/enforce-mountable-secrets',
+      ]);
+      expect(finding.severity).toBe('warning');
+      // "yes" is a guess at intent, so no fix is offered for it.
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('offers a safe fix for a spelling that differs only in case', () => {
+      // "True" is one of the twelve ParseBool accepts; "TRue" is not, and
+      // differs from a spelling that is by case alone.
+      const finding = expectRule(
+        serviceAccountEnforcing('"TRue"'),
+        'serviceaccount/invalid-enforce-mountable-secrets',
+      );
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([
+        {
+          op: 'set',
+          path: ['metadata', 'annotations', 'kubernetes.io/enforce-mountable-secrets'],
+          value: 'true',
+        },
+      ]);
+    });
+
+    it('leaves a non-string value to the schema layer', () => {
+      const ids = ruleIds(serviceAccountEnforcing('true'));
+      expect(ids).toContain('schema/type');
+      expect(ids).not.toContain('serviceaccount/invalid-enforce-mountable-secrets');
+    });
+
+    it('reports the annotation as deprecated on the default version', () => {
+      // The default bundle is 1.36; the per-version split is pinned in
+      // tests/versions.test.ts, which is where the 1.32 boundary belongs.
+      const finding = expectRule(
+        serviceAccountEnforcing('"true"'),
+        'serviceaccount/deprecated-enforce-mountable-secrets',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.message).toContain('1.32');
+    });
+
+    it('says nothing when the annotation is absent', () => {
+      expectNoRule(VALID_SERVICE_ACCOUNT, 'serviceaccount/deprecated-enforce-mountable-secrets');
+    });
+  });
+
+  describe('metadata', () => {
+    it('rejects a name that is not a DNS subdomain', () => {
+      expectRule(serviceAccount('', '  name: Build_Runner\n'), 'meta/invalid-name');
+    });
+
+    it('accepts a namespace, since a ServiceAccount is namespaced', () => {
+      expectRules(serviceAccount('', '  name: build-runner\n  namespace: ci\n'), []);
     });
   });
 });

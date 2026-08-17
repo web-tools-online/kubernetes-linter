@@ -3,11 +3,11 @@
 An online linter for Kubernetes **Pod**, **Deployment**, **StatefulSet**, **DaemonSet**,
 **Job**, **CronJob**, **Service**, **Ingress**, **IngressClass**, **PersistentVolume**,
 **PersistentVolumeClaim**, **StorageClass**, **NetworkPolicy**, **ConfigMap**, **Secret**,
-**ResourceQuota**, **LimitRange** and **HTTPRoute** (Gateway API) manifests. Paste YAML, get
-told what is wrong, why it is wrong, and — where the answer is unambiguous — apply the fix
-with one click.
+**ResourceQuota**, **LimitRange**, **ServiceAccount** and **HTTPRoute** (Gateway API)
+manifests. Paste YAML, get told what is wrong, why it is wrong, and — where the answer is
+unambiguous — apply the fix with one click.
 
-The kind comes from the document itself, so a multi-document manifest holding all eighteen is
+The kind comes from the document itself, so a multi-document manifest holding all nineteen is
 linted correctly in one pass.
 
 Everything runs in the browser. The manifest never leaves the tab: there is no server, no
@@ -67,6 +67,7 @@ schema, which OpenAPI cannot express:
 | Secret | the same key-format, relative-path and 1 MiB total-size checks as a ConfigMap, run against `data` merged with `stringData` (whose values silently win on a shared key, warned about rather than rejected), plus the required keys a well-known `type` demands: both `tls.crt` and `tls.key` for `kubernetes.io/tls`, a non-empty `username` or `password` for `kubernetes.io/basic-auth`, a non-empty `ssh-privatekey` for `kubernetes.io/ssh-auth`, a non-empty `.dockercfg`/`.dockerconfigjson` that decodes to a JSON object for the two Docker config types, a non-empty `kubernetes.io/service-account.name` annotation for `kubernetes.io/service-account-token`, and a `type` that is a near-miss of one of those spellings |
 | ResourceQuota | a `hard` key that is not a qualified name or, unprefixed, is not a resource the quota system counts natively, a negative limit, a fractional one on a resource that counts objects, an unrecognised `scopes` entry, `Terminating` alongside `NotTerminating` or `BestEffort` alongside `NotBestEffort` (each pair selects no Pod at all), a Pod-selecting scope bounding a resource a Pod does not consume, a `scopeSelector` requirement pairing a scope other than `PriorityClass` with an operator other than `Exists`, an `In`/`NotIn` requirement with no values, and an `Exists`/`DoesNotExist` one with values |
 | LimitRange | a `spec.limits` entry repeating a `type` already used, a `default` or `defaultRequest` on a `Pod` entry, a `PersistentVolumeClaim` entry bounding neither end of `storage`, a constraint key that is not a qualified name or, unprefixed, is not a standard resource, a `min` above the `max`, a `default` or `defaultRequest` outside them or the wrong way round, a `maxLimitRequestRatio` below 1 or above `max`/`min`, and a `default` differing from its `defaultRequest` for a resource that cannot be overcommitted |
+| ServiceAccount | a `secrets` entry carrying a `namespace`, `kind`, `uid`, `apiVersion`, `resourceVersion` or `fieldPath` (the apiserver keeps only the name and discards the rest before storing the object), an entry in either list naming no Secret or naming one no Secret could be called, the same `imagePullSecrets` entry twice, and a `kubernetes.io/enforce-mountable-secrets` annotation whose value Go's `ParseBool` cannot read — which leaves enforcement off — or, from 1.32, one present at all, since the apiserver itself now warns that it is deprecated |
 | HTTPRoute | two `parentRefs` to the same parent without a `sectionName` each, or with the same one twice, more than 128 matches across all rules, a `RequestRedirect` filter alongside `backendRefs` on the same rule, a `ReplacePrefixMatch` rewrite on a rule without exactly one `PathPrefix` match, a Service `backendRef` (the default `group`/`kind`) with no `port`, a filter list with both a `RequestRedirect` and a `URLRewrite`, or the same filter type twice, a filter whose populated field disagrees with its `type`, a `requestMirror` setting both `percent` and `fraction` or a `fraction` whose numerator exceeds its denominator, a path modifier whose populated field disagrees with its `type`, a `backendRequest` timeout longer than `request`, and a match path containing `//`, `/./`, `/../` or an escaped slash |
 
 The PodSpec rows apply to every kind that carries a pod template: there is one PodSpec rule
@@ -75,9 +76,9 @@ set, addressed relative to whichever kind the document declares, so it reports a
 are folded into that: the controller adds one Pod volume per template, so mounting one is
 recognised as valid even though `spec.template.spec.volumes` never mentions it. A Service, an
 Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a StorageClass, a
-NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange and an HTTPRoute have no
-pod template at all, so those rules do not run for them — each is checked by the schema, the
-name and label rules every object gets, and its own row above.
+NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a ServiceAccount and an
+HTTPRoute have no pod template at all, so those rules do not run for them — each is checked by
+the schema, the name and label rules every object gets, and its own row above.
 
 Hovering any field shows its type, whether it is required, and its description straight from
 the API specification.

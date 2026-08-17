@@ -87,6 +87,14 @@ release, gate it: report the problem on every version but withhold the fix, nami
 in the explanation (see the sidecar case in `rules/containers.ts`, `Container.restartPolicy`,
 1.28+). `tests/versions.test.ts` is where per-version behaviour is pinned.
 
+The one thing that gate cannot express is an *annotation*, which is not a schema field, so its
+presence in a version's closure says nothing: `rules/serviceaccount.ts` reads
+`ctx.schema.version` directly to decide whether to report the
+`kubernetes.io/enforce-mountable-secrets` deprecation, since below 1.32 the mechanism is
+current and saying anything would be wrong rather than merely early. That is the only
+version-conditional *report* in the codebase — everywhere else the finding fires on every
+version and only the fix or the wording varies.
+
 Two things do not come from OpenAPI and need manual attention when adding a version: the enum
 table in `rules/enums.ts`, and any version-gated rule advice. Known limitation: enum *values*
 added in a later release are accepted on older ones, because the table has no per-value
@@ -96,7 +104,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -118,9 +126,9 @@ reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
-StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange and an
-HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES` skip the kind
-(`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
+StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a
+ServiceAccount and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES`
+skip the kind (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
 StatefulSet's controller adds one Pod volume per `volumeClaimTemplates` entry, named after it,
@@ -134,14 +142,15 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/statefulset.ts`, `rules/daemonset.ts`, `rules/job.ts`, `rules/cronjob.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
 `rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
-`rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts` and
-`rules/httproute.ts`, which address `spec.selector`, `spec.strategy`, `spec.updateStrategy`,
+`rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts`,
+`rules/serviceaccount.ts` and `rules/httproute.ts`, which address `spec.selector`,
+`spec.strategy`, `spec.updateStrategy`,
 `spec.completionMode`, `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`,
 `spec.accessModes`, `spec.capacity` and the like — fields of the object itself, not of any pod
 spec.
-`storageclass.ts`, `configmap.ts` and `secret.ts` go one step further and address `ctx.doc`
-directly: none of the three has a `spec` at all, so `provisioner`, `data` and the rest are
-document-root fields.
+`storageclass.ts`, `configmap.ts`, `secret.ts` and `serviceaccount.ts` go one step further and
+address `ctx.doc` directly: none of the four has a `spec` at all, so `provisioner`, `data`,
+`secrets` and the rest are document-root fields.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -151,8 +160,9 @@ is kind-correct for free.
 Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem wherever it lives —
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
-`storageclass/*` / `networkpolicy/*` / `configmap/*` / `secret/*` / `resourcequota/*` /
-`limitrange/*` / `httproute/*` for checks on the object itself. The two document-level rules
+`storageclass/*` / `networkpolicy/*` / `serviceaccount/*` / `configmap/*` / `secret/*` /
+`resourcequota/*` / `limitrange/*` / `httproute/*` for checks on the object itself. The two
+document-level rules
 are named for what they check rather than for a kind, since they run for every kind including
 one with no Pod: `meta/*` in `metadata.ts` and `enum/*` in `enums.ts`. `Schema` is per version
 and holds every root; `Schema.for(kind)` returns the `KindSchema` view that both lint layers
@@ -441,6 +451,36 @@ skipped: a negative quantity, which upstream does not check for here — the inv
 ResourceQuota, whose ceilings it does. Nothing is version-gated: core/v1 LimitRange has been
 unchanged since well before the 1.25 floor.
 
+`serviceaccount.ts` is the thirteenth, the fourth kind with **no `spec`** — `secrets`,
+`imagePullSecrets` and `automountServiceAccountToken` are document-root fields, so like
+`configmap.ts` and `secret.ts` it reads `ctx.doc` — and the kind with the least apiserver
+validation of any here by a wide margin: `ValidateServiceAccount` checks the object's metadata
+and *nothing else*, so `meta/*` already covers everything that can be rejected and the module
+contains **not one error-severity finding**. It is the first module whose entire subject is the
+gap between what a manifest says and what the cluster keeps, and two upstream mechanisms
+account for all of it. The registry's `PrepareForCreate` calls `cleanSecretReferences`, which
+rewrites every `secrets` entry to `ObjectReference{Name}` before validation runs — so a
+`namespace`, `kind`, `uid`, `apiVersion`, `resourceVersion` or `fieldPath` written beside the
+name is discarded silently and the object is stored differently from how it was applied, which
+is `serviceaccount/ignored-secret-field` with a *safe* delete fix, since the apiserver performs
+that delete itself. And the `kubernetes.io/enforce-mountable-secrets` annotation is read with
+`strconv.ParseBool` whose error the admission plugin throws away, so a value it cannot parse
+leaves enforcement quietly *off* rather than failing — the same shape of quirk as
+`ingressclass.ts`'s default-class annotation, but with the twelve ParseBool spellings in place
+of one exact string, so `"True"` is fine here where it is not there. That annotation is also
+where the codebase's only version-conditional *report* lives (see the feature-gating note
+above). Both lists reference a Secret by name in the same namespace and so share
+`checkReferenceName`, which is where the missing and un-Secret-like names are reported.
+Duplicates are checked in `imagePullSecrets` **only**: upstream declares `secrets` an
+`x-kubernetes-list-type: map` keyed by name from 1.30 on, so layer 1 already reports a
+duplicate there as `schema/duplicate-list-entry` and checking it here would double-report on
+exactly the versions that describe it — that split is pinned in `tests/versions.test.ts` as
+upstream's own drift, the way NetworkPolicy's `podSelector` drift is, rather than papered over.
+The kind has no enum field at all, so it is the first to add nothing to `rules/enums.ts`.
+Deliberately skipped: `automountServiceAccountToken`, a bare bool whose only constraint is its
+type, and the emptiness of `secrets` itself, which is normal from 1.24 on — tokens stopped
+being auto-created then, so the list is usually absent rather than wrong.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
 markers, unlike the hand-written Kubernetes API types the other seventeen kinds come from, where
@@ -490,8 +530,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(237 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 259 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(238 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 260 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -524,7 +564,11 @@ own definition alone. ResourceQuota is nearly as cheap: its `hard` and `used` ma
 `Quantity` maps, a type the Pod closure already carries, so it adds only its own definition, its
 spec, its status and the two scope-selector definitions. LimitRange is cheaper still, and for
 the same reason: its five constraint maps are `Quantity` maps too, so it adds only its own
-definition, its spec and `LimitRangeItem`. API descriptions are kept on
+definition, its spec and `LimitRangeItem`. ServiceAccount is the cheapest root of the lot: it
+has no spec definition to add either, and both reference types it needs are already in the
+closure — `ObjectReference` through a PersistentVolume's `claimRef`, `LocalObjectReference`
+through a PodSpec's own `imagePullSecrets` — so it widens the bundle by exactly one definition,
+its own. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -543,6 +587,7 @@ them property-by-property would produce nonsense.
   / `daemonset/<thing>` / `job/<thing>` / `cronjob/<thing>` / `service/<thing>` /
   `ingress/<thing>` / `ingressclass/<thing>` / `persistentvolume/<thing>` /
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
+  `serviceaccount/<thing>` /
   `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
   `httproute/<thing>` for checks on the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are

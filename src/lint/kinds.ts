@@ -15,6 +15,7 @@ import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
 import { resourceQuotaRule } from './rules/resourcequota.js';
 import { secretRule } from './rules/secret.js';
 import { serviceRule } from './rules/service.js';
+import { serviceAccountRule } from './rules/serviceaccount.js';
 import { statefulSetRule } from './rules/statefulset.js';
 import { storageClassRule } from './rules/storageclass.js';
 
@@ -165,5 +166,9 @@ export const KINDS: Record<string, KindDescriptor> = {
   LimitRange: {
     kind: 'LimitRange',
     rules: [limitRangeRule],
+  },
+  ServiceAccount: {
+    kind: 'ServiceAccount',
+    rules: [serviceAccountRule],
   },
 };

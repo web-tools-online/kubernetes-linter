@@ -40,7 +40,11 @@
  * closure already carries, so below ObjectMeta it adds only its own spec,
  * status and the two scope-selector definitions. LimitRange is cheaper still,
  * and for the same reason: its five constraint maps are Quantity maps too, so
- * it adds only its own definition, its spec and LimitRangeItem.
+ * it adds only its own definition, its spec and LimitRangeItem. ServiceAccount
+ * is the cheapest of all: it has no spec definition either, and both reference
+ * types it needs are already in the closure - ObjectReference through a
+ * PersistentVolume's claimRef, LocalObjectReference through a PodSpec's own
+ * imagePullSecrets - so it adds its own definition and nothing else.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -82,6 +86,7 @@ const ROOTS = {
   Secret: 'io.k8s.api.core.v1.Secret',
   ResourceQuota: 'io.k8s.api.core.v1.ResourceQuota',
   LimitRange: 'io.k8s.api.core.v1.LimitRange',
+  ServiceAccount: 'io.k8s.api.core.v1.ServiceAccount',
 };
 
 /**
