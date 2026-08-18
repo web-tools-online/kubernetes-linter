@@ -13,6 +13,7 @@ import {
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_RESOURCEQUOTA,
+  VALID_ROLE,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_SERVICE_ACCOUNT,
@@ -47,8 +48,11 @@ import {
   persistentVolumeClaim,
   pod,
   podWithContainer,
+  policyRule,
   resourceQuota,
   resourceQuotaHard,
+  role,
+  roleVerbs,
   ruleIds,
   secret,
   secretData,
@@ -5345,6 +5349,268 @@ describe('ServiceAccount rules', () => {
 
     it('accepts a namespace, since a ServiceAccount is namespaced', () => {
       expectRules(serviceAccount('', '  name: build-runner\n  namespace: ci\n'), []);
+    });
+  });
+});
+
+describe('Role rules', () => {
+  it('lints a valid Role cleanly', () => {
+    expectRules(VALID_ROLE, []);
+  });
+
+  describe('the name, which RBAC validates as a path segment', () => {
+    it('accepts what no other kind here would', () => {
+      // ValidateRBACName is path.IsValidPathSegmentName and nothing else, so
+      // the colons and capitals the built-in roles use are all legal.
+      for (const name of ['system:controller:token-cleaner', 'MyRole', 'read_only', 'a.b.c']) {
+        expectRules(role('rules: []\n', `  name: ${name}\n`), ['role/no-rules']);
+      }
+    });
+
+    it('reports the four spellings a path segment cannot have', () => {
+      for (const [name, reason] of [
+        ['.', 'must not be "."'],
+        ['..', 'must not be ".."'],
+        ['my/role', 'must not contain "/"'],
+        ['my%role', 'must not contain "%"'],
+      ] as const) {
+        const finding = expectRule(role('rules: []\n', `  name: "${name}"\n`), 'meta/invalid-name');
+        expect(finding.message).toContain(reason);
+      }
+    });
+
+    it('accepts a namespace, since a Role is namespaced', () => {
+      expectRules(VALID_ROLE, []);
+      expectNoRule(VALID_ROLE, 'meta/namespace-not-allowed');
+    });
+  });
+
+  describe('rules', () => {
+    it('reports a Role that grants nothing', () => {
+      const finding = expectRule(role('rules: []\n'), 'role/no-rules');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['rules']);
+    });
+
+    it('reports an absent rules list the same way, anchored on the document', () => {
+      const finding = expectRule(role(''), 'role/no-rules');
+      expect(finding.path).toEqual([]);
+    });
+
+    it('leaves a rules list of the wrong type to the schema layer', () => {
+      const ids = ruleIds(role('rules: nothing\n'));
+      expect(ids).toContain('schema/type');
+      expect(ids).not.toContain('role/no-rules');
+    });
+
+    it('reads a key written with no value as the empty list the apiserver reads', () => {
+      const finding = expectRule(role('rules:\n'), 'role/no-rules');
+      expect(finding.path).toEqual(['rules']);
+    });
+  });
+
+  describe('the fields a policy rule must supply', () => {
+    it('leaves an absent verbs to the schema layer, which has it as required', () => {
+      const ids = ruleIds(policyRule('    apiGroups: [""]\n    resources: ["pods"]\n'));
+      expect(ids).toContain('schema/required-field');
+      expect(ids).not.toContain('role/missing-verbs');
+    });
+
+    it('reports an empty verbs, which the schema cannot express', () => {
+      const finding = expectRule(roleVerbs('[]'), 'role/missing-verbs');
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['rules', 0, 'verbs']);
+    });
+
+    it('reports an absent apiGroups on the rule itself', () => {
+      const finding = expectRule(
+        policyRule('    resources: ["pods"]\n    verbs: ["get"]\n'),
+        'role/missing-api-groups',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['rules', 0]);
+      expect(finding.anchor).toBe('key');
+    });
+
+    it('reports a valueless apiGroups key on the key itself', () => {
+      const finding = expectRule(
+        policyRule('    apiGroups:\n    resources: ["pods"]\n    verbs: ["get"]\n'),
+        'role/missing-api-groups',
+      );
+      expect(finding.path).toEqual(['rules', 0, 'apiGroups']);
+    });
+
+    it('reports an empty apiGroups on the field', () => {
+      const finding = expectRule(
+        policyRule('    apiGroups: []\n    resources: ["pods"]\n    verbs: ["get"]\n'),
+        'role/missing-api-groups',
+      );
+      expect(finding.path).toEqual(['rules', 0, 'apiGroups']);
+    });
+
+    it('accepts "" as the core group rather than reading it as empty', () => {
+      expectRules(policyRule('    apiGroups: [""]\n    resources: ["pods"]\n    verbs: ["get"]\n'), []);
+    });
+
+    it('reports a missing resources', () => {
+      const finding = expectRule(
+        policyRule('    apiGroups: [""]\n    verbs: ["get"]\n'),
+        'role/missing-resources',
+      );
+      expect(finding.severity).toBe('error');
+    });
+  });
+
+  describe('nonResourceURLs', () => {
+    it('reports any use of them, since a Role is namespaced', () => {
+      const finding = expectRule(
+        policyRule('    nonResourceURLs: ["/healthz"]\n    verbs: ["get"]\n'),
+        'role/non-resource-urls',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['rules', 0, 'nonResourceURLs']);
+      // Deleting the URLs and moving the rule to a ClusterRole are both
+      // plausible readings, so the fix is offered but never applied for you.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('does not go on to ask a URL rule for an api group', () => {
+      // validatePolicyRule returns after the non-resource branch, so upstream
+      // asks for neither apiGroups nor resources here and neither do we.
+      const ids = ruleIds(policyRule('    nonResourceURLs: ["/healthz"]\n    verbs: ["get"]\n'));
+      expect(ids).not.toContain('role/missing-api-groups');
+      expect(ids).not.toContain('role/missing-resources');
+    });
+  });
+
+  describe('list hygiene', () => {
+    it('reports an entry repeated in a list', () => {
+      const finding = expectRule(roleVerbs('["get", "list", "get"]'), 'role/duplicate-entry');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 2]);
+      expect(finding.message).toContain('entry 1');
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([{ op: 'delete', path: ['rules', 0, 'verbs', 2] }]);
+    });
+
+    it('reports an entry a "*" beside it already covers', () => {
+      const finding = expectRule(roleVerbs('["*", "get"]'), 'role/redundant-wildcard');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 1]);
+      // Provably inert: the "*" grants at least as much as the entry does.
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('says nothing about a "*" on its own', () => {
+      expectRules(roleVerbs('["*"]'), []);
+    });
+
+    it('reads "*" in resourceNames as a name rather than a wildcard', () => {
+      const yaml = policyRule(
+        '    apiGroups: [""]\n    resources: ["pods"]\n    resourceNames: ["*", "web"]\n    verbs: ["get"]\n',
+      );
+      const finding = expectRule(yaml, 'role/wildcard-resource-name');
+      expect(finding.path).toEqual(['rules', 0, 'resourceNames', 0]);
+      // Removing it widens the rule from nothing to everything, which is not
+      // something to do unasked.
+      expect(finding.fix?.safe).toBe(false);
+      // And "web" beside it is not redundant, since nothing here is a wildcard.
+      expect(ruleIds(yaml)).not.toContain('role/redundant-wildcard');
+    });
+
+    it('reports an empty string where one matches nothing', () => {
+      const finding = expectRule(roleVerbs('["get", ""]'), 'role/empty-entry');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 1]);
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('says nothing about an empty apiGroups entry, which is the core group', () => {
+      expectNoRule(
+        policyRule('    apiGroups: ["", "apps"]\n    resources: ["pods"]\n    verbs: ["get"]\n'),
+        'role/empty-entry',
+      );
+    });
+  });
+
+  describe('verbs', () => {
+    it('reports a near-miss of a real verb', () => {
+      const finding = expectRule(roleVerbs('["gets"]'), 'role/unknown-verb');
+      expect(finding.severity).toBe('warning');
+      expect(finding.message).toContain('did you mean "get"');
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['rules', 0, 'verbs', 0], value: 'get' },
+      ]);
+    });
+
+    it('reports a verb spelled with the wrong case, which never matches', () => {
+      expect(expectRule(roleVerbs('["List"]'), 'role/unknown-verb').message).toContain('"list"');
+    });
+
+    it('says nothing about a verb that belongs to one resource', () => {
+      for (const verb of ['bind', 'escalate', 'impersonate', 'approve', 'use']) {
+        expectNoRule(roleVerbs(`["${verb}"]`), 'role/unknown-verb');
+      }
+    });
+
+    it('says nothing about a verb far enough from every known one to be deliberate', () => {
+      // An aggregated apiserver may define verbs of its own, so only a
+      // near-miss is worth a word.
+      expectNoRule(roleVerbs('["teleport"]'), 'role/unknown-verb');
+    });
+  });
+
+  describe('resources', () => {
+    it('reports a resource written as a Kind', () => {
+      const finding = expectRule(
+        policyRule('    apiGroups: [""]\n    resources: ["Pod"]\n    verbs: ["get"]\n'),
+        'role/uppercase-resource',
+      );
+      expect(finding.severity).toBe('warning');
+      // Lowercasing is necessary but not sufficient — "pod" is still not "pods".
+      expect(finding.fix?.safe).toBe(false);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['rules', 0, 'resources', 0], value: 'pod' },
+      ]);
+    });
+
+    it('accepts a subresource and a wildcard', () => {
+      expectRules(
+        policyRule('    apiGroups: [""]\n    resources: ["pods/log", "*"]\n    verbs: ["get"]\n'),
+        ['role/redundant-wildcard'],
+      );
+    });
+  });
+
+  describe('resourceNames against the verbs they narrow', () => {
+    const named = (verbs: string) =>
+      policyRule(
+        `    apiGroups: [""]\n    resources: ["pods"]\n    resourceNames: ["web"]\n    verbs: ${verbs}\n`,
+      );
+
+    it('reports a create, whose name lives in the body the authorizer never reads', () => {
+      const finding = expectRule(named('["create"]'), 'role/unrestrictable-verb');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 0]);
+      expect(finding.explanation).toContain('inside the body');
+    });
+
+    it('reports a deletecollection, which addresses no member of the collection', () => {
+      const finding = expectRule(named('["get", "deletecollection"]'), 'role/unrestrictable-verb');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 1]);
+    });
+
+    it('says nothing about the verbs a name can narrow', () => {
+      expectRules(named('["get", "update", "patch", "delete"]'), []);
+    });
+
+    it('leaves a "*" alone', () => {
+      // A "*" grants the eight ordinary verbs at once, and that the two
+      // unnameable ones fall out of a name-restricted rule reads as intended
+      // rather than as a mistake.
+      expectRules(named('["*"]'), []);
+    });
+
+    it('says nothing about a create with no resourceNames to narrow it', () => {
+      expectRules(roleVerbs('["create"]'), []);
     });
   });
 });

@@ -44,7 +44,11 @@
  * is the cheapest of all: it has no spec definition either, and both reference
  * types it needs are already in the closure - ObjectReference through a
  * PersistentVolume's claimRef, LocalObjectReference through a PodSpec's own
- * imagePullSecrets - so it adds its own definition and nothing else.
+ * imagePullSecrets - so it adds its own definition and nothing else. Role is
+ * the first root outside core/v1, apps/v1, batch/v1, networking/v1 and
+ * storage/v1, and it shares nothing below ObjectMeta with any of them, but
+ * there is barely anything to share: a PolicyRule is five lists of plain
+ * strings, so the closure grows by Role and PolicyRule alone.
  * Separate per-kind files would be near-duplicates, and a single bundle also
  * means lint() can switch kinds mid-document without loading anything.
  *
@@ -87,6 +91,7 @@ const ROOTS = {
   ResourceQuota: 'io.k8s.api.core.v1.ResourceQuota',
   LimitRange: 'io.k8s.api.core.v1.LimitRange',
   ServiceAccount: 'io.k8s.api.core.v1.ServiceAccount',
+  Role: 'io.k8s.api.rbac.v1.Role',
 };
 
 /**

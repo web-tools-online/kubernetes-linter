@@ -3,6 +3,7 @@ import {
   isDNS1123Label,
   isDNS1123Subdomain,
   isLabelValue,
+  isPathSegmentName,
   isQualifiedName,
   suggestName,
 } from '../../k8s/names.js';
@@ -29,6 +30,11 @@ const NAME_FORMATS = {
     check: isDNS1035Label,
     explanation:
       'This kind is named with an RFC 1035 label: like a DNS label, but it must also start with a letter rather than a digit. The name becomes a DNS record of its own, and a label starting with a digit cannot be told apart from part of an IP address.',
+  },
+  'path-segment': {
+    check: isPathSegmentName,
+    explanation:
+      'RBAC names are validated only as path segments: anything spellable as one segment of a request URL will do, uppercase letters, "_" and ":" included — which is how the built-in roles come to be called things like "system:node". Only "." and "..", which would address a different path, and the "/" and "%" that path syntax reserves, are refused.',
   },
 } as const;
 

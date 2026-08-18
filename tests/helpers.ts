@@ -753,3 +753,39 @@ export function serviceAccountEnforcing(value: string): string {
     `  name: build-runner\n  annotations:\n    kubernetes.io/enforce-mountable-secrets: ${value}\n`,
   );
 }
+
+/** A minimal valid Role that individual tests mutate. */
+export const VALID_ROLE = `apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-reader
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+`;
+
+/**
+ * Build a Role from a fragment of its top-level fields. Like `serviceAccount()`
+ * the fragment is not a spec — a Role has none, `rules` hanging directly off
+ * the document — so it is indented zero spaces.
+ */
+export function role(fieldsFragment: string, metadataFragment = '  name: pod-reader\n'): string {
+  return `apiVersion: rbac.authorization.k8s.io/v1\nkind: Role\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/**
+ * A Role carrying one policy rule. The fragment is written as that rule's own
+ * fields, each indented four spaces; the leading dash takes the place of the
+ * first four on the opening line. Nearly every check here is per-rule, so this
+ * is the shape most tests want.
+ */
+export function policyRule(fieldsFragment: string): string {
+  return role(`rules:\n${fieldsFragment.replace(/^ {4}/, '  - ')}`);
+}
+
+/** A Role whose one rule grants the given verbs over pods. */
+export function roleVerbs(verbs: string): string {
+  return policyRule(`    apiGroups: [""]\n    resources: ["pods"]\n    verbs: ${verbs}\n`);
+}
