@@ -13,6 +13,7 @@ import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
 import { resourceQuotaRule } from './rules/resourcequota.js';
+import { roleRule } from './rules/role.js';
 import { secretRule } from './rules/secret.js';
 import { serviceRule } from './rules/service.js';
 import { serviceAccountRule } from './rules/serviceaccount.js';
@@ -58,9 +59,11 @@ export interface KindDescriptor {
    * a StatefulSet takes a label, since its name is the prefix of every Pod
    * name it generates and those are hostnames; a Service takes the stricter
    * RFC 1035 label, since its name is the first component of an SRV record.
-   * Defaults to "subdomain".
+   * An RBAC kind takes a path segment, which is looser than all three: its
+   * name is only ever addressed in a URL, never resolved, so anything a path
+   * segment can spell will do. Defaults to "subdomain".
    */
-  nameFormat?: 'subdomain' | 'label' | 'rfc1035';
+  nameFormat?: 'subdomain' | 'label' | 'rfc1035' | 'path-segment';
   /**
    * Set for a kind that lives outside any namespace, so `metadata.namespace`
    * is not merely unusual but forbidden — the apiserver rejects it with "not
@@ -170,5 +173,10 @@ export const KINDS: Record<string, KindDescriptor> = {
   ServiceAccount: {
     kind: 'ServiceAccount',
     rules: [serviceAccountRule],
+  },
+  Role: {
+    kind: 'Role',
+    nameFormat: 'path-segment',
+    rules: [roleRule],
   },
 };

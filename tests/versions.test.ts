@@ -21,6 +21,7 @@ import {
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_RESOURCEQUOTA,
+  VALID_ROLE,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_SERVICE_ACCOUNT,
@@ -42,7 +43,9 @@ import {
   persistentVolumeClaim,
   pod,
   podWithContainer,
+  policyRule,
   resourceQuota,
+  role,
   secretData,
   service,
   serviceAccountEnforcing,
@@ -114,6 +117,7 @@ describe('bundled versions', () => {
         'ResourceQuota',
         'LimitRange',
         'ServiceAccount',
+        'Role',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -133,6 +137,7 @@ describe('bundled versions', () => {
       expect(schema.for('ResourceQuota')?.apiVersion, version).toBe('v1');
       expect(schema.for('LimitRange')?.apiVersion, version).toBe('v1');
       expect(schema.for('ServiceAccount')?.apiVersion, version).toBe('v1');
+      expect(schema.for('Role')?.apiVersion, version).toBe('rbac.authorization.k8s.io/v1');
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -394,6 +399,40 @@ describe('bundled versions', () => {
       expect(await ruleIdsAt(version, yaml), version).toEqual(
         described ? ['schema/duplicate-list-entry'] : [],
       );
+    }
+  });
+
+  it('lints a valid Role cleanly on every version', async () => {
+    // The nineteenth root, and the first outside core/v1, apps/v1, batch/v1,
+    // networking/v1 and storage/v1. It shares nothing below ObjectMeta with any
+    // of them, but there is nothing to share: a PolicyRule is five lists of
+    // plain strings, so the closure grows by Role and PolicyRule alone.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_ROLE, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a Role the same way on every version', async () => {
+    // Nothing in the module is version-gated: rbac/v1 has been served unchanged
+    // since 1.8, long before the 1.25 floor, and every field a policy rule has
+    // is in all twelve bundles.
+    const yaml = policyRule('    apiGroups: [""]\n    resources: ["Pods"]\n    verbs: ["gets"]\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'role/uppercase-resource',
+        'role/unknown-verb',
+      ]);
+    }
+  });
+
+  it('validates a Role name as a path segment on every version', async () => {
+    // The one kind here whose name is not a DNS name of some sort: RBAC
+    // validates it with path.IsValidPathSegmentName, which is what lets the
+    // built-in roles carry colons and capitals.
+    const yaml = role('rules: []\n', '  name: system:Controller_x\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['role/no-rules']);
     }
   });
 

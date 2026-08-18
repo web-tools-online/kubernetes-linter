@@ -201,6 +201,30 @@ export function isRelativePathKey(value: string): boolean {
   return value === '.' || value.startsWith('..');
 }
 
+/**
+ * A name that can be spelled as one segment of a request path:
+ * IsValidPathSegmentName in k8s.io/apimachinery/pkg/api/validation/path. The
+ * loosest name format the apiserver has, and the one RBAC validates its
+ * objects with — `ValidateRBACName` is this function and nothing else — which
+ * is what lets a role be called "system:controller:token-cleaner" or "MyRole"
+ * where every other kind here would need a DNS subdomain.
+ *
+ * Only four spellings are refused, and all four because of what a name means
+ * in a URL rather than because of how it reads: "." and ".." would address a
+ * different path than themselves, and "/" and "%" are reserved by the path
+ * syntax.
+ */
+export function isPathSegmentName(value: string): FormatCheck {
+  // Upstream never reaches this case: ValidateObjectMeta reports an empty name
+  // as a missing one before calling the format function at all. Here the
+  // caller has a name in hand, so the answer has to come from here.
+  if (value.length === 0) return { ok: false, reason: 'must not be empty' };
+  if (value === '.' || value === '..') return { ok: false, reason: `must not be "${value}"` };
+  if (value.includes('/')) return { ok: false, reason: 'must not contain "/"' };
+  if (value.includes('%')) return { ok: false, reason: 'must not contain "%"' };
+  return { ok: true };
+}
+
 export function isLabelValue(value: string): FormatCheck {
   if (value.length > DNS_1123_LABEL_MAX)
     return { ok: false, reason: `must be at most ${DNS_1123_LABEL_MAX} characters` };

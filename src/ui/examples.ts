@@ -781,4 +781,39 @@ imagePullSecrets:
 automountServiceAccountToken: false
 `,
   },
+  {
+    id: 'role',
+    label: 'A Role with problems',
+    blurb:
+      'A rule reaching for a non-resource URL a namespace has no say over, a resource written as its Kind, a name restriction on the one verb that carries no name, and a "*" that means the opposite of what it looks like.',
+    yaml: `apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  # Capitals and colons are fine: RBAC validates a name as a path segment,
+  # not as a DNS subdomain.
+  name: ci:Deployer
+  namespace: ci
+rules:
+  - apiGroups: [""]
+    # Named as the request path spells it — "pods" — not as the manifest's
+    # "kind" does.
+    resources: ["Pod"]
+    verbs: ["get", "list"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    # The name of a created object is in the body, which the authorizer never
+    # reads, so this rule grants no create at all.
+    resourceNames: ["web"]
+    verbs: ["create", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    # Not a wildcard here: resourceNames is compared by string equality, so
+    # this asks for the Secret literally called "*".
+    resourceNames: ["*"]
+    verbs: ["get"]
+  # A namespaced rule cannot reach a path that belongs to the server itself.
+  - nonResourceURLs: ["/healthz"]
+    verbs: ["get"]
+`,
+  },
 ];
