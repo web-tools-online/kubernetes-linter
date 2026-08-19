@@ -21,6 +21,7 @@ import {
   VALID_PERSISTENTVOLUME,
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_RESOURCEQUOTA,
+  VALID_CLUSTER_ROLE,
   VALID_ROLE,
   VALID_SECRET,
   VALID_SERVICE,
@@ -44,6 +45,7 @@ import {
   pod,
   podWithContainer,
   policyRule,
+  urlRule,
   resourceQuota,
   role,
   secretData,
@@ -118,6 +120,7 @@ describe('bundled versions', () => {
         'LimitRange',
         'ServiceAccount',
         'Role',
+        'ClusterRole',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -138,6 +141,9 @@ describe('bundled versions', () => {
       expect(schema.for('LimitRange')?.apiVersion, version).toBe('v1');
       expect(schema.for('ServiceAccount')?.apiVersion, version).toBe('v1');
       expect(schema.for('Role')?.apiVersion, version).toBe('rbac.authorization.k8s.io/v1');
+      expect(schema.for('ClusterRole')?.apiVersion, version).toBe(
+        'rbac.authorization.k8s.io/v1',
+      );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
@@ -433,6 +439,31 @@ describe('bundled versions', () => {
     const yaml = role('rules: []\n', '  name: system:Controller_x\n');
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['role/no-rules']);
+    }
+  });
+
+  it('lints a valid ClusterRole cleanly on every version', async () => {
+    // The twentieth root, and the cheaper half of the RBAC pair: PolicyRule is
+    // already in the closure from Role, so this one grows it by ClusterRole
+    // and AggregationRule alone.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_CLUSTER_ROLE, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a ClusterRole the same way on every version', async () => {
+    // Nothing in either RBAC module is version-gated: rbac/v1 has been served
+    // unchanged since 1.8 and aggregationRule since 1.9, both long before the
+    // 1.25 floor. The one thing that does move is upstream's own annotation of
+    // `rules` as an atomic list from 1.30, which changes nothing here — atomic
+    // is not the map type that would make layer 1 look for duplicates.
+    const yaml = urlRule('["healthz"]', '["list"]');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'clusterrole/relative-non-resource-url',
+        'clusterrole/non-resource-verb',
+      ]);
     }
   });
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  VALID_CLUSTER_ROLE,
   VALID_CONFIGMAP,
   VALID_CRONJOB,
   VALID_DAEMONSET,
@@ -19,6 +20,9 @@ import {
   VALID_SERVICE_ACCOUNT,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
+  aggregatedClusterRole,
+  clusterPolicyRule,
+  clusterRole,
   configMap,
   configMapData,
   cronJob,
@@ -64,6 +68,7 @@ import {
   statefulSetWithPodSpec,
   storageClass,
   storageClassWith,
+  urlRule,
 } from './helpers.js';
 
 describe('metadata', () => {
@@ -5611,6 +5616,231 @@ describe('Role rules', () => {
 
     it('says nothing about a create with no resourceNames to narrow it', () => {
       expectRules(roleVerbs('["create"]'), []);
+    });
+  });
+});
+
+describe('ClusterRole rules', () => {
+  it('lints a valid ClusterRole cleanly', () => {
+    expectRules(VALID_CLUSTER_ROLE, []);
+  });
+
+  it('rejects a namespace, since a ClusterRole is cluster-scoped', () => {
+    expectRule(
+      clusterRole('rules: []\n', '  name: node-reader\n  namespace: default\n'),
+      'meta/namespace-not-allowed',
+    );
+  });
+
+  it('validates the name as a path segment, exactly as a Role is', () => {
+    expectRules(clusterRole('rules: []\n', '  name: system:node-reader\n'), ['role/no-rules']);
+  });
+
+  describe('the policy rule checks it shares with a Role', () => {
+    it('reports the same things under the same ids', () => {
+      // validatePolicyRule is one function taking an isNamespaced flag, so
+      // everything but the non-resource branch is the Role module's, run
+      // unchanged and keeping its role/* ids.
+      const ids = ruleIds(
+        clusterPolicyRule('    apiGroups: [""]\n    resources: ["Nodes"]\n    verbs: ["gets"]\n'),
+      );
+      expect(ids).toEqual(['role/uppercase-resource', 'role/unknown-verb']);
+    });
+
+    it('names the kind it was reached through in the empty-rules message', () => {
+      const finding = expectRule(clusterRole('rules: []\n'), 'role/no-rules');
+      expect(finding.message).toContain('This ClusterRole');
+    });
+
+    it('still leaves an absent verbs to the schema layer', () => {
+      const ids = ruleIds(clusterPolicyRule('    apiGroups: [""]\n    resources: ["nodes"]\n'));
+      expect(ids).toContain('schema/required-field');
+      expect(ids).not.toContain('role/missing-verbs');
+    });
+  });
+
+  describe('nonResourceURLs, which only a ClusterRole may carry', () => {
+    it('accepts a rule that names nothing but URLs', () => {
+      expectRules(urlRule('["/healthz", "/version/*"]'), []);
+    });
+
+    it('reports a rule naming resources beside them', () => {
+      const finding = expectRule(
+        clusterPolicyRule(
+          '    nonResourceURLs: ["/healthz"]\n    apiGroups: [""]\n    resources: ["nodes"]\n    verbs: ["get"]\n',
+        ),
+        'clusterrole/mixed-rule',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['rules', 0, 'nonResourceURLs']);
+      expect(finding.message).toContain('apiGroups and resources');
+    });
+
+    it('counts resourceNames as the resource half too', () => {
+      const finding = expectRule(
+        clusterPolicyRule(
+          '    nonResourceURLs: ["/healthz"]\n    resourceNames: ["web"]\n    verbs: ["get"]\n',
+        ),
+        'clusterrole/mixed-rule',
+      );
+      expect(finding.message).toContain('resourceNames');
+    });
+
+    it('says nothing more about a rule it has already rejected', () => {
+      // Upstream returns at that error, so the advice below it has nothing to
+      // say about an object that will not be stored.
+      const ids = ruleIds(
+        clusterPolicyRule(
+          '    nonResourceURLs: ["healthz"]\n    apiGroups: [""]\n    resources: ["nodes"]\n    verbs: ["list"]\n',
+        ),
+      );
+      expect(ids).toEqual(['clusterrole/mixed-rule']);
+    });
+
+    it('does not go on to ask a URL rule for an api group', () => {
+      const ids = ruleIds(urlRule('["/healthz"]'));
+      expect(ids).not.toContain('role/missing-api-groups');
+      expect(ids).not.toContain('role/missing-resources');
+    });
+
+    it('reports a URL that is not an absolute path', () => {
+      const finding = expectRule(urlRule('["healthz"]'), 'clusterrole/relative-non-resource-url');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['rules', 0, 'nonResourceURLs', 0]);
+      // Every path this could have meant starts with a slash.
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.ops).toEqual([
+        { op: 'set', path: ['rules', 0, 'nonResourceURLs', 0], value: '/healthz' },
+      ]);
+    });
+
+    it('reports a "*" that is not the last character', () => {
+      const finding = expectRule(
+        urlRule('["/apis/*/healthz"]'),
+        'clusterrole/embedded-wildcard-url',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('says nothing about a trailing "*" or a bare one', () => {
+      expectRules(urlRule('["/healthz*"]'), []);
+      expectRules(urlRule('["*"]'), []);
+    });
+
+    it('applies the shared list hygiene to the URLs as well', () => {
+      expectRules(urlRule('["/healthz", "/healthz"]'), ['role/duplicate-entry']);
+      expectRules(urlRule('["*", "/healthz"]'), ['role/redundant-wildcard']);
+    });
+
+    it('reports a verb a non-resource request never carries', () => {
+      const finding = expectRule(
+        urlRule('["/healthz"]', '["get", "list"]'),
+        'clusterrole/non-resource-verb',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['rules', 0, 'verbs', 1]);
+      // Which HTTP method was wanted is the author's to say.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('accepts the HTTP methods a non-resource request is authorized as', () => {
+      expectRules(urlRule('["/healthz"]', '["get", "post", "put", "patch", "delete", "head", "options"]'), []);
+      expectRules(urlRule('["/healthz"]', '["*"]'), []);
+    });
+  });
+
+  describe('aggregationRule', () => {
+    const bySelector = '    - matchLabels:\n        rbac.example.com/aggregate-to-view: "true"\n';
+
+    it('accepts an aggregated ClusterRole written without rules', () => {
+      expectRules(aggregatedClusterRole(bySelector), []);
+    });
+
+    it('says nothing about its empty rules, which the controller fills in', () => {
+      // The inverse of the plain case: a ClusterRole that grants nothing today
+      // is exactly how an aggregated one is meant to be written.
+      expectNoRule(aggregatedClusterRole(bySelector), 'role/no-rules');
+      expectNoRule(aggregatedClusterRole(bySelector, 'rules: []\n'), 'role/no-rules');
+    });
+
+    it('reports rules written beside it, which the controller overwrites', () => {
+      const finding = expectRule(
+        aggregatedClusterRole(
+          bySelector,
+          'rules:\n  - apiGroups: [""]\n    resources: ["nodes"]\n    verbs: ["get"]\n',
+        ),
+        'clusterrole/aggregated-rules',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['rules']);
+      // A permission grant disappearing is never applied unasked.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('still checks the rules it is about to lose', () => {
+      const ids = ruleIds(
+        aggregatedClusterRole(
+          bySelector,
+          'rules:\n  - apiGroups: [""]\n    resources: ["Nodes"]\n    verbs: ["get"]\n',
+        ),
+      );
+      expect(ids).toContain('role/uppercase-resource');
+    });
+
+    it('reports an aggregationRule that selects nothing', () => {
+      const finding = expectRule(
+        clusterRole('aggregationRule: {}\n'),
+        'clusterrole/no-aggregation-selectors',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['aggregationRule']);
+    });
+
+    it('anchors that on the selectors key when there is one', () => {
+      const finding = expectRule(
+        clusterRole('aggregationRule:\n  clusterRoleSelectors: []\n'),
+        'clusterrole/no-aggregation-selectors',
+      );
+      expect(finding.path).toEqual(['aggregationRule', 'clusterRoleSelectors']);
+    });
+
+    it('reports an empty selector, which matches every ClusterRole rather than none', () => {
+      const finding = expectRule(
+        aggregatedClusterRole('    - {}\n'),
+        'clusterrole/empty-aggregation-selector',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['aggregationRule', 'clusterRoleSelectors', 0]);
+    });
+
+    it('checks a selector the way every other LabelSelector here is checked', () => {
+      const finding = expectRule(
+        aggregatedClusterRole(
+          '    - matchExpressions:\n        - key: tier\n          operator: In\n',
+        ),
+        'clusterrole/selector-values-required',
+      );
+      expect(finding.path).toEqual([
+        'aggregationRule',
+        'clusterRoleSelectors',
+        0,
+        'matchExpressions',
+        0,
+      ]);
+    });
+
+    it('checks a selector label key as a label key', () => {
+      expectRule(
+        aggregatedClusterRole('    - matchLabels:\n        Not A Key: "true"\n'),
+        'meta/invalid-label-key',
+      );
+    });
+
+    it('leaves an aggregationRule of the wrong type to the schema layer', () => {
+      const ids = ruleIds(clusterRole('aggregationRule: everything\n'));
+      expect(ids).toContain('schema/type');
+      expect(ids).not.toContain('clusterrole/no-aggregation-selectors');
     });
   });
 });
