@@ -816,4 +816,37 @@ rules:
     verbs: ["get"]
 `,
   },
+  {
+    id: 'clusterrole',
+    label: 'A ClusterRole with problems',
+    blurb:
+      'A rule mixing a server path with a resource, a URL missing the slash every request path starts with, a verb no non-resource request ever carries, and an aggregation rule that quietly owns the rules written beside it.',
+    yaml: `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: monitoring
+# Setting this hands "rules" to the aggregation controller, which recomputes
+# the list from every ClusterRole the selectors match and writes it back.
+aggregationRule:
+  clusterRoleSelectors:
+    # An empty selector imposes no requirement, so it matches every ClusterRole
+    # in the cluster rather than none of them.
+    - {}
+rules:
+  # A rule is either about resources or about server paths, never both.
+  - nonResourceURLs: ["/metrics"]
+    apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  - nonResourceURLs:
+      # Compared against the path from the request line, which always begins
+      # with a slash.
+      - healthz
+      # Only a trailing "*" is a wildcard; anywhere else it is just a character.
+      - /apis/*/healthz
+    # A non-resource request is authorized as its HTTP method, so "list" is
+    # never the verb being asked about here.
+    verbs: ["get", "list"]
+`,
+  },
 ];

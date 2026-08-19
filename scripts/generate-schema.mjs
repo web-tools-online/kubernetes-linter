@@ -92,6 +92,7 @@ const ROOTS = {
   LimitRange: 'io.k8s.api.core.v1.LimitRange',
   ServiceAccount: 'io.k8s.api.core.v1.ServiceAccount',
   Role: 'io.k8s.api.rbac.v1.Role',
+  ClusterRole: 'io.k8s.api.rbac.v1.ClusterRole',
 };
 
 /**

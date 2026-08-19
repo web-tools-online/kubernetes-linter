@@ -8,7 +8,10 @@ const RESOURCES_DOCS =
 const VERBS_DOCS =
   'https://kubernetes.io/docs/reference/access-authn-authz/authorization/#determine-the-request-verb';
 
-/** The entry that stands for "every value" in verbs, apiGroups and resources. */
+/**
+ * The entry that stands for "every value" in verbs, apiGroups, resources and
+ * a ClusterRole's nonResourceURLs. It is not one in resourceNames.
+ */
 const WILDCARD = '*';
 
 /**
@@ -75,6 +78,15 @@ type ListField = 'verbs' | 'nonResourceURLs' | 'apiGroups' | 'resources' | 'reso
  * those is a warning: the object is created, the RoleBinding resolves, and the
  * only symptom is a "forbidden" that arrives much later from somewhere else.
  *
+ * Almost all of this is shared with `clusterrole.ts` rather than duplicated:
+ * upstream checks both kinds' rules with the one `validatePolicyRule`, which
+ * takes an `isNamespaced` flag and consults it in a single place, so
+ * `checkPolicyRules` takes a `PolicyRuleOwner` carrying that one branch and
+ * everything else runs unchanged for either kind. A finding from a ClusterRole
+ * therefore keeps its `role/*` id, exactly as a finding from a CronJob's
+ * nested JobSpec keeps its `job/*` one: the id names the validator the check
+ * comes from, not the kind the document declares.
+ *
  * A Role's name is the one place a kind here departs from the usual DNS
  * subdomain: `ValidateRBACName` is `path.IsValidPathSegmentName`, the loosest
  * format the apiserver has, which is why the descriptor sets
@@ -92,46 +104,42 @@ type ListField = 'verbs' | 'nonResourceURLs' | 'apiGroups' | 'resources' | 'reso
 export const roleRule: Rule = {
   id: 'role/rules',
   run(ctx: RuleContext) {
-    const declared = ctx.doc['rules'];
-    // A `rules` that is neither a list nor absent is layer 1's to report. A
-    // key written with no value decodes to null, which the apiserver reads as
-    // the empty list exactly as it reads an absent one, so it lands below.
-    if (declared != null && asArray(declared) === undefined) return;
-    const rules = asArray(declared);
-
-    if (rules === undefined || rules.length === 0) {
-      ctx.report({
-        ruleId: 'role/no-rules',
-        severity: 'warning',
-        path: 'rules' in ctx.doc ? ['rules'] : [],
-        message: 'This Role grants nothing: it has no rules.',
-        explanation:
-          'RBAC is purely additive — permissions come from the rules a Role lists and from nowhere else — so a Role with an empty list denies every request made through it. The apiserver creates it without complaint, and any RoleBinding to it resolves and grants no access at all.',
-        docsUrl: RBAC_DOCS,
-      });
-      return;
-    }
-
-    rules.forEach((entry, index) => {
-      const rule = asObject(entry);
-      if (!rule) return;
-      checkPolicyRule(ctx, rule, ['rules', index]);
-    });
+    checkPolicyRules(ctx, ROLE);
   },
 };
 
 /**
- * One entry of `rules`. The order below is upstream's, including the early
- * return: `validatePolicyRule` stops after a non-resource URL rather than
- * going on to ask for an api group, since a rule that reached that branch is
- * not describing resources at all.
+ * The kind a policy rule belongs to. Upstream validates a Role's rules and a
+ * ClusterRole's with the same `validatePolicyRule`, differing only in an
+ * `isNamespaced` flag it consults in exactly one place — the non-resource URL
+ * branch — so that branch is all a caller has to bring, along with the noun its
+ * messages name and whether an empty rule list is worth a word.
  */
-function checkPolicyRule(ctx: RuleContext, rule: Record<string, unknown>, base: Path): void {
-  checkList(ctx, rule, base, 'verbs');
-  checkEmptyList(ctx, rule, base, 'verbs');
+export interface PolicyRuleOwner {
+  /** How the kind names itself in a message. */
+  kind: string;
+  /**
+   * Whether a rule list that grants nothing is worth reporting. False for an
+   * aggregated ClusterRole, which is *meant* to be written without rules: the
+   * controller fills them in from the ClusterRoles its selectors match.
+   */
+  reportEmpty: boolean;
+  /**
+   * A rule listing at least one non-resource URL. A Role may not carry one at
+   * all; a ClusterRole may, but then the rule may name nothing else. Either
+   * reading ends the rule's validation, which is why upstream returns straight
+   * after this branch and why nothing below it runs.
+   */
+  checkNonResourceRule(ctx: RuleContext, rule: Record<string, unknown>, base: Path): void;
+}
 
-  const nonResourceURLs = asArray(rule['nonResourceURLs']) ?? [];
-  if (nonResourceURLs.length > 0) {
+const ROLE: PolicyRuleOwner = {
+  kind: 'Role',
+  reportEmpty: true,
+  checkNonResourceRule(ctx, rule, base) {
+    // The URLs are rejected rather than authorized, so the verbs beside them
+    // are still measured against the vocabulary every other rule here uses.
+    checkList(ctx, rule, base, 'verbs');
     ctx.report({
       ruleId: 'role/non-resource-urls',
       severity: 'error',
@@ -150,9 +158,63 @@ function checkPolicyRule(ctx: RuleContext, rule: Record<string, unknown>, base: 
         ops: [{ op: 'delete', path: [...base, 'nonResourceURLs'] }],
       },
     });
+  },
+};
+
+/** Every entry of the document's `rules`, checked as its owning kind's. */
+export function checkPolicyRules(ctx: RuleContext, owner: PolicyRuleOwner): void {
+  const declared = ctx.doc['rules'];
+  // A `rules` that is neither a list nor absent is layer 1's to report. A
+  // key written with no value decodes to null, which the apiserver reads as
+  // the empty list exactly as it reads an absent one, so it lands below.
+  if (declared != null && asArray(declared) === undefined) return;
+  const rules = asArray(declared);
+
+  if (rules === undefined || rules.length === 0) {
+    if (!owner.reportEmpty) return;
+    ctx.report({
+      ruleId: 'role/no-rules',
+      severity: 'warning',
+      path: 'rules' in ctx.doc ? ['rules'] : [],
+      message: `This ${owner.kind} grants nothing: it has no rules.`,
+      explanation: `RBAC is purely additive — permissions come from the rules a ${owner.kind} lists and from nowhere else — so a ${owner.kind} with an empty list denies every request made through it. The apiserver creates it without complaint, and any binding to it resolves and grants no access at all.`,
+      docsUrl: RBAC_DOCS,
+    });
     return;
   }
 
+  rules.forEach((entry, index) => {
+    const rule = asObject(entry);
+    if (!rule) return;
+    checkPolicyRule(ctx, rule, ['rules', index], owner);
+  });
+}
+
+/**
+ * One entry of `rules`. The order below is upstream's, including the early
+ * return: `validatePolicyRule` stops after a non-resource URL rather than
+ * going on to ask for an api group, since a rule that reached that branch is
+ * not describing resources at all.
+ */
+function checkPolicyRule(
+  ctx: RuleContext,
+  rule: Record<string, unknown>,
+  base: Path,
+  owner: PolicyRuleOwner,
+): void {
+  // Upstream asks for a verb before it looks at anything else, and so does
+  // this. The verbs *themselves* wait for the branch below: a rule over URLs
+  // is authorized with HTTP methods rather than the eight resource verbs, so
+  // which vocabulary they are measured against is the owner's to say.
+  checkEmptyList(ctx, rule, base, 'verbs');
+
+  const nonResourceURLs = asArray(rule['nonResourceURLs']) ?? [];
+  if (nonResourceURLs.length > 0) {
+    owner.checkNonResourceRule(ctx, rule, base);
+    return;
+  }
+
+  checkList(ctx, rule, base, 'verbs');
   checkList(ctx, rule, base, 'apiGroups');
   checkEmptyList(ctx, rule, base, 'apiGroups');
   checkList(ctx, rule, base, 'resources');
@@ -210,11 +272,12 @@ function checkEmptyList(
  * it already covers, and an empty string all leave the grant exactly as it
  * would have been without them.
  */
-function checkList(
+export function checkList(
   ctx: RuleContext,
   rule: Record<string, unknown>,
   base: Path,
-  field: Exclude<ListField, 'nonResourceURLs'>,
+  field: ListField,
+  checkEntry?: (value: string, path: Path) => void,
 ): void {
   const entries = asArray(rule[field]);
   if (!entries) return;
@@ -280,7 +343,7 @@ function checkList(
         path,
         message: `An empty string in ${field} matches nothing.`,
         explanation:
-          'RBAC compares this entry against the request as a plain string, and no request carries an empty verb, resource or object name, so the entry can never answer yes. Note that "" does mean something in apiGroups — it is how the core group is written — which is the likely source of the confusion.',
+          'RBAC compares this entry against the request as a plain string, and no request carries an empty verb, resource, object name or path, so the entry can never answer yes. Note that "" does mean something in apiGroups — it is how the core group is written — which is the likely source of the confusion.',
         docsUrl: RESOURCES_DOCS,
         fix: {
           title: 'Remove the empty entry',
@@ -291,15 +354,22 @@ function checkList(
       return;
     }
 
+    // A caller that brings its own per-entry check replaces the field's
+    // default one: a ClusterRole's URL rule measures its verbs against the
+    // HTTP methods, and its URLs are a list no Role ever reaches.
     switch (field) {
       case 'verbs':
-        checkVerb(ctx, value, path);
+        if (checkEntry) checkEntry(value, path);
+        else checkVerb(ctx, value, path);
         return;
       case 'resources':
         checkResource(ctx, value, path);
         return;
       case 'resourceNames':
         checkResourceName(ctx, value, path);
+        return;
+      case 'nonResourceURLs':
+        checkEntry?.(value, path);
         return;
       case 'apiGroups':
         return;

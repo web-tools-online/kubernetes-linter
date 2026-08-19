@@ -104,7 +104,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -119,18 +119,18 @@ deliberately *not* in it: that lives in the generated bundle, so the generator s
 single source of truth for definition names — and `apiVersion` is derived from that definition
 name too, never declared. `nameFormat` defaults to `'subdomain'`, is `'label'` for a kind whose
 name prefixes generated Pod names (StatefulSet) and `'rfc1035'` for a Service, whose name has
-to start with a letter. It is `'path-segment'` for a Role, which is the loose end of the same
+to start with a letter. It is `'path-segment'` for the two RBAC kinds, which are the loose end of the same
 scale: RBAC validates a name with `path.IsValidPathSegmentName` and nothing else, so anything
 spellable as one segment of a URL is legal there — capitals, `_` and the `:` the built-in roles
 use — and only `.`, `..`, `/` and `%` are refused. `metadata.ts` reads it. `clusterScoped` is the other thing that module
-reads: on a kind that lives outside namespaces (IngressClass, PersistentVolume) a
+reads: on a kind that lives outside namespaces (IngressClass, PersistentVolume, ClusterRole) a
 `metadata.namespace` is not a name to validate but a field the apiserver forbids, so it is
 reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
 StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a
-ServiceAccount, a Role and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES`
+ServiceAccount, a Role, a ClusterRole and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES`
 skip the kind (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -152,9 +152,10 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `spec.completionMode`, `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`,
 `spec.accessModes`, `spec.capacity` and the like — fields of the object itself, not of any pod
 spec.
-`storageclass.ts`, `configmap.ts`, `secret.ts`, `serviceaccount.ts` and `role.ts` go one step
-further and address `ctx.doc` directly: none of the five has a `spec` at all, so `provisioner`,
-`data`, `secrets`, `rules` and the rest are document-root fields.
+`storageclass.ts`, `configmap.ts`, `secret.ts`, `serviceaccount.ts`, `role.ts` and
+`clusterrole.ts` go one step further and address `ctx.doc` directly: none of the six has a
+`spec` at all, so `provisioner`, `data`, `secrets`, `rules`, `aggregationRule` and the rest are
+document-root fields.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -165,7 +166,8 @@ Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem whe
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
 `storageclass/*` / `networkpolicy/*` / `serviceaccount/*` / `configmap/*` / `secret/*` /
-`resourcequota/*` / `limitrange/*` / `role/*` / `httproute/*` for checks on the object itself. The two
+`resourcequota/*` / `limitrange/*` / `role/*` / `clusterrole/*` / `httproute/*` for checks on
+the object itself. The two
 document-level rules
 are named for what they check rather than for a kind, since they run for every kind including
 one with no Pod: `meta/*` in `metadata.ts` and `enum/*` in `enums.ts`. `Schema` is per version
@@ -522,9 +524,48 @@ aggregated apiserver may define verbs of its own, so an unrecognised one is repo
 whole, the same reason a NetworkPolicy's `policyTypes` cannot go in that table — so like
 ServiceAccount it adds nothing to `rules/enums.ts`. Deliberately skipped: whether a named
 resource, api group or verb actually exists, which is a question about the API surface one
-cluster serves rather than about the document; and `ClusterRole`, whose `aggregationRule` and
-legal `nonResourceURLs` make it a different validator rather than the same one cluster-scoped.
-Nothing is version-gated: rbac/v1 has been served unchanged since 1.8.
+cluster serves rather than about the document. Nothing is version-gated: rbac/v1 has been
+served unchanged since 1.8.
+
+`clusterrole.ts` is the fifteenth, the sixth kind with **no `spec`**, and the first whose
+checks are almost entirely *another module's*: upstream validates a Role's rules and a
+ClusterRole's with one `validatePolicyRule` taking an `isNamespaced` flag, and that flag is
+consulted in exactly one place, so `role.ts` exports `checkPolicyRules(ctx, owner)` and this
+module supplies a `PolicyRuleOwner` carrying that one branch, the noun its messages name, and
+whether an empty rule list is worth reporting. Everything else — the missing-field errors, the
+list hygiene, the verb and resource advice — runs unchanged and keeps its `role/*` ids, exactly
+as a CronJob's nested JobSpec keeps `job/*` ones: the id names the validator a check comes
+from, not the kind the document declares. The third `PolicyRuleOwner` field is what an
+aggregated ClusterRole needs: its `rules` are written by a controller, so a manifest that omits
+them is correct rather than empty and `role/no-rules` has to sit out.
+
+What is left is the two things a ClusterRole has that a Role does not. The first is legal
+`nonResourceURLs`, where a Role's flat rejection becomes a narrower one — a rule may name URLs
+or resources, never both — and then three findings about a rule the apiserver stores happily:
+`NonResourceURLMatches` compares an entry to the request path by equality, or by prefix when it
+ends in `*`, and by nothing else, so a URL without the leading slash and a `*` anywhere but last
+each match no request that will ever arrive. The third is the verbs beside them, and it is why
+the verb list check moved *after* the non-resource branch rather than before it: a non-resource
+request never reaches the mapping that derives the eight RBAC verbs from a path's shape, so it
+keeps the verb `RequestInfoFactory` gave it at the top — its HTTP method, lowercased — and
+`list`, `watch` and `create` beside a URL grant nothing however natural they look. Each owner
+therefore states its own verb vocabulary through `checkList`'s per-entry hook, and a Role's URL
+rule still measures its verbs the way every other rule here does.
+
+The second is `aggregationRule`, which is not a permission but an instruction: the field's own
+description says the rules become "controller managed and direct changes to Rules will be
+stomped by the controller", so rules written beside it, a rule listing no selectors at all (it
+aggregates nothing, and the controller then keeps the list empty), and a selector that is empty
+(a `LabelSelector` imposing no requirement matches every ClusterRole in the cluster, which is
+the opposite of what a blank one looks like it means) are all warnings about a manifest that
+says one thing and stores another. Its selectors go through `selector.ts`'s `checkRequirement`
+and `metadata.ts`'s `checkKeyedMap`, the same helpers a NetworkPolicy's peers use. The kind has
+no scalar enum field either, so like Role and ServiceAccount it adds nothing to
+`rules/enums.ts`. Deliberately skipped: whether the selectors match any ClusterRole the cluster
+actually holds, for the same reason `role.ts` does not ask whether a named resource exists.
+Nothing is version-gated: `aggregationRule` has been served unchanged since 1.9, and upstream's
+marking of `rules` as an atomic list from 1.30 changes nothing, atomic not being the map type
+that would make layer 1 look for duplicates.
 
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
@@ -616,7 +657,10 @@ through a PodSpec's own `imagePullSecrets` — so it widens the bundle by exactl
 its own. Role is the first root outside core/v1, apps/v1, batch/v1, networking/v1 and
 storage/v1, and it shares nothing below `ObjectMeta` with any of them — but there is nothing to
 share: a `PolicyRule` is five lists of plain strings, so the closure grows by `Role` and
-`PolicyRule` alone. API descriptions are kept on
+`PolicyRule` alone. ClusterRole is then the second-cheapest root of all, for CronJob's reason:
+it holds the very same `PolicyRule` list Role already reached, and its one field beyond that
+hangs a `LabelSelector` the Deployment closure has carried all along — so it adds `ClusterRole`
+and `AggregationRule` and nothing else. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -637,7 +681,7 @@ them property-by-property would produce nonsense.
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
   `serviceaccount/<thing>` /
   `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
-  `role/<thing>` / `httproute/<thing>` for checks on the object itself; the
+  `role/<thing>` / `clusterrole/<thing>` / `httproute/<thing>` for checks on the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its

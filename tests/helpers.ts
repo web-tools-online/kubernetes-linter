@@ -789,3 +789,46 @@ export function policyRule(fieldsFragment: string): string {
 export function roleVerbs(verbs: string): string {
   return policyRule(`    apiGroups: [""]\n    resources: ["pods"]\n    verbs: ${verbs}\n`);
 }
+
+/** A minimal valid ClusterRole that individual tests mutate. */
+export const VALID_CLUSTER_ROLE = `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: node-reader
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+`;
+
+/**
+ * Build a ClusterRole from a fragment of its top-level fields. A ClusterRole
+ * has no spec either, so the fragment is indented zero spaces as a Role's is;
+ * the default metadata carries no namespace, the kind being cluster-scoped.
+ */
+export function clusterRole(
+  fieldsFragment: string,
+  metadataFragment = '  name: node-reader\n',
+): string {
+  return `apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRole\nmetadata:\n${metadataFragment}${fieldsFragment}`;
+}
+
+/** A ClusterRole carrying one policy rule, written as `policyRule()` writes a Role's. */
+export function clusterPolicyRule(fieldsFragment: string): string {
+  return clusterRole(`rules:\n${fieldsFragment.replace(/^ {4}/, '  - ')}`);
+}
+
+/** A ClusterRole whose one rule reaches for non-resource URLs. */
+export function urlRule(urls: string, verbs = '["get"]'): string {
+  return clusterPolicyRule(`    nonResourceURLs: ${urls}\n    verbs: ${verbs}\n`);
+}
+
+/**
+ * A ClusterRole whose rules the aggregation controller owns. The fragment is
+ * the `clusterRoleSelectors` list, each entry indented four spaces.
+ */
+export function aggregatedClusterRole(selectorsFragment: string, rulesFragment = ''): string {
+  return clusterRole(
+    `aggregationRule:\n  clusterRoleSelectors:\n${selectorsFragment}${rulesFragment}`,
+  );
+}

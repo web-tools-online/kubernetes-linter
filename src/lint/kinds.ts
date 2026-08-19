@@ -1,5 +1,6 @@
 import type { Path } from './types.js';
 import type { Rule } from './rules/context.js';
+import { clusterRoleRule } from './rules/clusterrole.js';
 import { configMapRule } from './rules/configmap.js';
 import { cronJobRule } from './rules/cronjob.js';
 import { daemonSetRule } from './rules/daemonset.js';
@@ -178,5 +179,11 @@ export const KINDS: Record<string, KindDescriptor> = {
     kind: 'Role',
     nameFormat: 'path-segment',
     rules: [roleRule],
+  },
+  ClusterRole: {
+    kind: 'ClusterRole',
+    nameFormat: 'path-segment',
+    clusterScoped: true,
+    rules: [clusterRoleRule],
   },
 };
