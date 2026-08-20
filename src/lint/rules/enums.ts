@@ -215,6 +215,18 @@ const ENUMS: Record<string, EnumSpec> = {
     note: 'A "Pod" entry bounds the total across a Pod\'s containers, a "Container" entry each container on its own.',
   },
 
+  // The two RBAC reference fields. Both are rejected by the apiserver with a
+  // NotSupported listing exactly these values, so they belong here rather than
+  // in rules/rolebinding.ts — which is left with what turns on them.
+  'RoleRef.kind': {
+    values: ['Role', 'ClusterRole'],
+    note: 'A RoleBinding may name either: a ClusterRole bound this way grants its rules in the binding\'s namespace alone, which is how one definition comes to be reused across namespaces.',
+  },
+  'Subject.kind': {
+    values: ['ServiceAccount', 'User', 'Group'],
+    note: 'Only a ServiceAccount names an object the cluster holds; a User or a Group is whatever the authenticator called the requester, so neither has a namespace and neither name is validated.',
+  },
+
   'StatefulSetSpec.podManagementPolicy': {
     values: ['OrderedReady', 'Parallel'],
     note: 'Defaults to OrderedReady, which starts and replaces Pods one at a time, in ordinal order.',

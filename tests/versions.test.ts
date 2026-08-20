@@ -23,6 +23,7 @@ import {
   VALID_RESOURCEQUOTA,
   VALID_CLUSTER_ROLE,
   VALID_ROLE,
+  VALID_ROLE_BINDING,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_SERVICE_ACCOUNT,
@@ -46,6 +47,7 @@ import {
   podWithContainer,
   policyRule,
   urlRule,
+  bindingSubject,
   resourceQuota,
   role,
   secretData,
@@ -121,6 +123,7 @@ describe('bundled versions', () => {
         'ServiceAccount',
         'Role',
         'ClusterRole',
+        'RoleBinding',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -142,6 +145,9 @@ describe('bundled versions', () => {
       expect(schema.for('ServiceAccount')?.apiVersion, version).toBe('v1');
       expect(schema.for('Role')?.apiVersion, version).toBe('rbac.authorization.k8s.io/v1');
       expect(schema.for('ClusterRole')?.apiVersion, version).toBe(
+        'rbac.authorization.k8s.io/v1',
+      );
+      expect(schema.for('RoleBinding')?.apiVersion, version).toBe(
         'rbac.authorization.k8s.io/v1',
       );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
@@ -463,6 +469,31 @@ describe('bundled versions', () => {
       expect(await ruleIdsAt(version, yaml), version).toEqual([
         'clusterrole/relative-non-resource-url',
         'clusterrole/non-resource-verb',
+      ]);
+    }
+  });
+
+  it('lints a valid RoleBinding cleanly on every version', async () => {
+    // The twenty-first root, and the last of the RBAC three: it shares
+    // ObjectMeta with everything and nothing else with Role or ClusterRole, so
+    // it grows the closure by RoleBinding, RoleRef and Subject alone.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_ROLE_BINDING, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a RoleBinding the same way on every version', async () => {
+    // Nothing in rules/rolebinding.ts is version-gated either: RoleBinding,
+    // RoleRef and Subject have carried exactly these fields since rbac/v1 was
+    // served in 1.8, and neither the defaulting the module leans on nor the
+    // authorizer's subject matching has moved since.
+    const yaml = bindingSubject(
+      '    kind: User\n    name: alice\n    apiGroup: ""\n    namespace: default\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'rolebinding/ignored-subject-namespace',
       ]);
     }
   });

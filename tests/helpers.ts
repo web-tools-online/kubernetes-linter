@@ -832,3 +832,40 @@ export function aggregatedClusterRole(selectorsFragment: string, rulesFragment =
     `aggregationRule:\n  clusterRoleSelectors:\n${selectorsFragment}${rulesFragment}`,
   );
 }
+
+/** A minimal valid RoleBinding that individual tests mutate. */
+export const VALID_ROLE_BINDING = `apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-pods
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: pod-reader
+subjects:
+  - kind: ServiceAccount
+    name: reader
+`;
+
+/**
+ * Build a RoleBinding from a fragment of its top-level fields. Like a Role's
+ * it has no spec, so the fragment is indented zero spaces; the default roleRef
+ * resolves cleanly, leaving a test free to say only what it is about.
+ */
+export function roleBinding(
+  fieldsFragment: string,
+  roleRefFragment = '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: pod-reader\n',
+): string {
+  return `apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: read-pods\n  namespace: default\nroleRef:\n${roleRefFragment}${fieldsFragment}`;
+}
+
+/** A RoleBinding carrying the given subjects, each entry indented four spaces. */
+export function bindingSubjects(subjectsFragment: string): string {
+  return roleBinding(`subjects:\n${subjectsFragment}`);
+}
+
+/** A RoleBinding with one subject, written from the fragment's own fields. */
+export function bindingSubject(fieldsFragment: string): string {
+  return bindingSubjects(fieldsFragment.replace(/^ {4}/, '  - '));
+}

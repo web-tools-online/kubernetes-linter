@@ -104,7 +104,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, HTTPRoute)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, HTTPRoute)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -119,7 +119,7 @@ deliberately *not* in it: that lives in the generated bundle, so the generator s
 single source of truth for definition names — and `apiVersion` is derived from that definition
 name too, never declared. `nameFormat` defaults to `'subdomain'`, is `'label'` for a kind whose
 name prefixes generated Pod names (StatefulSet) and `'rfc1035'` for a Service, whose name has
-to start with a letter. It is `'path-segment'` for the two RBAC kinds, which are the loose end of the same
+to start with a letter. It is `'path-segment'` for the three RBAC kinds, which are the loose end of the same
 scale: RBAC validates a name with `path.IsValidPathSegmentName` and nothing else, so anything
 spellable as one segment of a URL is legal there — capitals, `_` and the `:` the built-in roles
 use — and only `.`, `..`, `/` and `%` are refused. `metadata.ts` reads it. `clusterScoped` is the other thing that module
@@ -130,7 +130,7 @@ reported as `meta/namespace-not-allowed` and the format check is skipped.
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
 StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a
-ServiceAccount, a Role, a ClusterRole and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES`
+ServiceAccount, a Role, a ClusterRole, a RoleBinding and an HTTPRoute describe no Pod at all. Its absence is what makes `POD_RULES`
 skip the kind (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
 else. `claimTemplatesPath` is the one concession to a kind that generates volumes: a
@@ -146,16 +146,17 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`,
 `rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
 `rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts`,
-`rules/serviceaccount.ts`, `rules/role.ts` and `rules/httproute.ts`, which address
+`rules/serviceaccount.ts`, `rules/role.ts`, `rules/rolebinding.ts` and `rules/httproute.ts`,
+which address
 `spec.selector`,
 `spec.strategy`, `spec.updateStrategy`,
 `spec.completionMode`, `spec.schedule`, `spec.ports`, `spec.rules`, `spec.controller`,
 `spec.accessModes`, `spec.capacity` and the like — fields of the object itself, not of any pod
 spec.
-`storageclass.ts`, `configmap.ts`, `secret.ts`, `serviceaccount.ts`, `role.ts` and
-`clusterrole.ts` go one step further and address `ctx.doc` directly: none of the six has a
-`spec` at all, so `provisioner`, `data`, `secrets`, `rules`, `aggregationRule` and the rest are
-document-root fields.
+`storageclass.ts`, `configmap.ts`, `secret.ts`, `serviceaccount.ts`, `role.ts`,
+`clusterrole.ts` and `rolebinding.ts` go one step further and address `ctx.doc` directly: none
+of the seven has a `spec` at all, so `provisioner`, `data`, `secrets`, `rules`,
+`aggregationRule`, `roleRef` and the rest are document-root fields.
 
 `ctx.doc` is the document root (used by `metadata.ts`, `enums.ts` and every per-kind module);
 `ctx.spec` is the PodSpec wherever this kind keeps it, and `{}` for a kind with no pod
@@ -166,7 +167,8 @@ Rule IDs stay `pod/*` for PodSpec checks — they describe a PodSpec problem whe
 and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `service/*` /
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
 `storageclass/*` / `networkpolicy/*` / `serviceaccount/*` / `configmap/*` / `secret/*` /
-`resourcequota/*` / `limitrange/*` / `role/*` / `clusterrole/*` / `httproute/*` for checks on
+`resourcequota/*` / `limitrange/*` / `role/*` / `clusterrole/*` / `rolebinding/*` /
+`httproute/*` for checks on
 the object itself. The two
 document-level rules
 are named for what they check rather than for a kind, since they run for every kind including
@@ -567,6 +569,44 @@ Nothing is version-gated: `aggregationRule` has been served unchanged since 1.9,
 marking of `rules` as an atomic list from 1.30 changes nothing, atomic not being the map type
 that would make layer 1 look for duplicates.
 
+`rolebinding.ts` is the sixteenth, the seventh kind with **no `spec`** — `roleRef` and
+`subjects` are document-root fields — and the one whose validator turns least on the document
+and most on what the apiserver has already done to it. `ValidateRoleBinding` is short: the
+metadata, the three fields of `roleRef`, then `ValidateRoleBindingSubject` per entry. But two
+defaulting functions run first, and between them they decide most of what this module may say.
+`SetDefaults_RoleBinding` fills a zero-length `roleRef.apiGroup` in with the RBAC group, and
+`SetDefaults_Subject` fills a zero-length subject `apiGroup` in from the subject's `kind` — `""`
+for a ServiceAccount, the RBAC group for a User or a Group — so on **both** fields an absent
+value and an explicit `""` are correct on every kind, and only a value written by hand can be
+wrong. That is the StorageClass `volumeBindingMode` trap twice over, and the exact inverse of
+the Job `restartPolicy` case where the default is itself invalid; getting it backwards here
+would report an error on the most ordinary RoleBinding there is.
+
+Layer 1 covers the required half — `roleRef` on the binding, `kind` and `name` on both a
+`RoleRef` and a `Subject` — which leaves this module the same "an empty string where a missing
+key would have been" split `ingress.ts` and `role.ts` document, since upstream asks for a
+*length* where the schema asks for a key. The two `kind` fields are scalar enums whose invalid
+values the apiserver rejects outright, so unlike the three RBAC kinds before it this one does
+add to `rules/enums.ts` (`RoleRef.kind`, `Subject.kind`) rather than hand-checking them — and
+the module then skips a subject whose kind it does not recognise, the way `resourcequota.ts`
+skips a requirement with an unknown `scopeName`. The name formats are the last rejection and
+they are deliberately three different things: the binding's own name and its `roleRef.name` are
+RBAC names and so path segments, a ServiceAccount subject's name is validated as a
+ServiceAccount's own name and so a DNS subdomain, and a User or Group name is not checked at
+all, those coming from an authenticator rather than from an object the cluster holds.
+
+What is left is what the apiserver stores and the authorizer then never reads. The widest is a
+`namespace` beside a User or a Group: `appliesToUser` matches a User by name and a Group by
+membership, consulting the field for neither, and nothing strips it — the `Subject` type's own
+description says an authorizer "should report an error" for it, and none does. Beside that sit
+a repeated subject (matching stops at the first one the request's user answers to) and a
+binding with no subjects at all, which grants its role to nobody. Deliberately skipped: whether
+the referenced role or a named ServiceAccount exists, for the same reason `role.ts` does not ask
+whether a named resource does; the immutability of `roleRef`, which only constrains an update;
+and a **ServiceAccount subject's absent namespace**, which is not a mistake but the idiom — for
+a RoleBinding the authorizer defaults it to the binding's own namespace. Nothing is
+version-gated: rbac/v1 has been served unchanged since 1.8.
+
 Unlike every other kind, HTTPRoute's schema carries `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
 markers, unlike the hand-written Kubernetes API types the other seventeen kinds come from, where
@@ -616,8 +656,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(240 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
-above — for 262 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(245 defs at 1.36 from the k8s swagger, plus ~22 more flattened from the HTTPRoute CRD — see
+above — for 267 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record HTTPRoute owns and nothing else does, recording the pinned Gateway API release its
 definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -660,7 +700,10 @@ share: a `PolicyRule` is five lists of plain strings, so the closure grows by `R
 `PolicyRule` alone. ClusterRole is then the second-cheapest root of all, for CronJob's reason:
 it holds the very same `PolicyRule` list Role already reached, and its one field beyond that
 hangs a `LabelSelector` the Deployment closure has carried all along — so it adds `ClusterRole`
-and `AggregationRule` and nothing else. API descriptions are kept on
+and `AggregationRule` and nothing else. RoleBinding is the last of the three and the only one
+that shares nothing at all with the other two: a `RoleRef` and a `Subject` are flat records of
+plain strings that no other root reaches, so it adds exactly `RoleBinding`, `RoleRef` and
+`Subject`. API descriptions are kept on
 purpose — they are what the hover tooltip and most `explanation` fields render.
 
 Definitions that are objects in the spec but scalars on the wire (`Quantity`, `IntOrString`,
@@ -681,7 +724,8 @@ them property-by-property would produce nonsense.
   `persistentvolumeclaim/<thing>` / `storageclass/<thing>` / `networkpolicy/<thing>` /
   `serviceaccount/<thing>` /
   `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
-  `role/<thing>` / `clusterrole/<thing>` / `httproute/<thing>` for checks on the object itself; the
+  `role/<thing>` / `clusterrole/<thing>` / `rolebinding/<thing>` / `httproute/<thing>` for
+  checks on the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its
