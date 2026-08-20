@@ -14,6 +14,7 @@ import { networkPolicyRule } from './rules/networkpolicy.js';
 import { persistentVolumeRule } from './rules/persistentvolume.js';
 import { persistentVolumeClaimRule } from './rules/persistentvolumeclaim.js';
 import { resourceQuotaRule } from './rules/resourcequota.js';
+import { roleBindingRule } from './rules/rolebinding.js';
 import { roleRule } from './rules/role.js';
 import { secretRule } from './rules/secret.js';
 import { serviceRule } from './rules/service.js';
@@ -185,5 +186,10 @@ export const KINDS: Record<string, KindDescriptor> = {
     nameFormat: 'path-segment',
     clusterScoped: true,
     rules: [clusterRoleRule],
+  },
+  RoleBinding: {
+    kind: 'RoleBinding',
+    nameFormat: 'path-segment',
+    rules: [roleBindingRule],
   },
 };

@@ -849,4 +849,38 @@ rules:
     verbs: ["get", "list"]
 `,
   },
+  {
+    id: 'rolebinding',
+    label: 'A RoleBinding with problems',
+    blurb:
+      'A roleRef pointing at the wrong API group, a ServiceAccount subject carrying an apiGroup it may not have, a namespace beside a User the authorizer never reads, and the same subject listed twice.',
+    yaml: `apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-pods
+  namespace: default
+roleRef:
+  # The API group, not the apiVersion — and RBAC's own is the only one a
+  # binding can name. Leaving the field out fills it in correctly.
+  apiGroup: rbac.authorization.k8s.io/v1
+  kind: Role
+  name: pod-reader
+subjects:
+  # A ServiceAccount belongs to the core group, whose name is the empty string,
+  # and the apiserver checks this field's length rather than its value.
+  - kind: ServiceAccount
+    name: reader
+    apiGroup: rbac.authorization.k8s.io
+  # A User is whatever the authenticator called the requester, so it lives in
+  # no namespace and this is stored and then never consulted.
+  - kind: User
+    name: alice
+    apiGroup: rbac.authorization.k8s.io
+    namespace: default
+  # Matching stops at the first subject the request's user answers to.
+  - kind: User
+    name: alice
+    apiGroup: rbac.authorization.k8s.io
+`,
+  },
 ];

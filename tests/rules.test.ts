@@ -15,12 +15,15 @@ import {
   VALID_PERSISTENTVOLUMECLAIM,
   VALID_RESOURCEQUOTA,
   VALID_ROLE,
+  VALID_ROLE_BINDING,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_SERVICE_ACCOUNT,
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
   aggregatedClusterRole,
+  bindingSubject,
+  bindingSubjects,
   clusterPolicyRule,
   clusterRole,
   configMap,
@@ -56,6 +59,7 @@ import {
   resourceQuota,
   resourceQuotaHard,
   role,
+  roleBinding,
   roleVerbs,
   ruleIds,
   secret,
@@ -5841,6 +5845,250 @@ describe('ClusterRole rules', () => {
       const ids = ruleIds(clusterRole('aggregationRule: everything\n'));
       expect(ids).toContain('schema/type');
       expect(ids).not.toContain('clusterrole/no-aggregation-selectors');
+    });
+  });
+});
+
+describe('RoleBinding rules', () => {
+  it('lints a valid RoleBinding cleanly', () => {
+    expectRules(VALID_ROLE_BINDING, []);
+  });
+
+  it('validates the name as a path segment, exactly as a Role is', () => {
+    expectRules(
+      `apiVersion: rbac.authorization.k8s.io/v1\nkind: RoleBinding\nmetadata:\n  name: system:read-pods\n  namespace: default\nroleRef:\n  kind: Role\n  name: pod-reader\nsubjects:\n  - kind: User\n    name: alice\n`,
+      [],
+    );
+  });
+
+  describe('roleRef', () => {
+    it('accepts an absent apiGroup, which the apiserver defaults', () => {
+      // SetDefaults_RoleBinding fills a zero-length api group in with the RBAC
+      // group before validation runs, so the field is optional in practice
+      // even though only one value is ever accepted.
+      expectRules(roleBinding('subjects:\n  - kind: User\n    name: alice\n', '  kind: Role\n  name: pod-reader\n'), []);
+    });
+
+    it('accepts an apiGroup written as the empty string, for the same reason', () => {
+      expectRules(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: ""\n  kind: Role\n  name: pod-reader\n',
+        ),
+        [],
+      );
+    });
+
+    it('reports an apiGroup that is not RBAC\'s own', () => {
+      const finding = expectRule(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io/v1\n  kind: Role\n  name: pod-reader\n',
+        ),
+        'rolebinding/invalid-role-ref-api-group',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['roleRef', 'apiGroup']);
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('reports an unknown kind through the enum table', () => {
+      const finding = expectRule(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRoleBinding\n  name: pod-reader\n',
+        ),
+        'enum/invalid-value',
+      );
+      expect(finding.path).toEqual(['roleRef', 'kind']);
+    });
+
+    it('reports an empty name where the schema layer reports a missing one', () => {
+      const finding = expectRule(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: ""\n',
+        ),
+        'rolebinding/missing-role-ref-name',
+      );
+      expect(finding.severity).toBe('error');
+
+      const ids = ruleIds(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n',
+        ),
+      );
+      expect(ids).toContain('schema/required-field');
+      expect(ids).not.toContain('rolebinding/missing-role-ref-name');
+    });
+
+    it('validates the referenced name as a path segment', () => {
+      const finding = expectRule(
+        roleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: apps/pod-reader\n',
+        ),
+        'rolebinding/invalid-role-ref-name',
+      );
+      expect(finding.path).toEqual(['roleRef', 'name']);
+      expect(finding.message).toContain('must not contain "/"');
+    });
+  });
+
+  describe('subjects', () => {
+    it('reports a binding with no subjects at all', () => {
+      const finding = expectRule(roleBinding(''), 'rolebinding/no-subjects');
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual([]);
+    });
+
+    it('anchors the same finding on an empty list', () => {
+      const finding = expectRule(roleBinding('subjects: []\n'), 'rolebinding/no-subjects');
+      expect(finding.path).toEqual(['subjects']);
+    });
+
+    it('reports an empty name where the schema layer reports a missing one', () => {
+      const finding = expectRule(
+        bindingSubject('    kind: User\n    name: ""\n'),
+        'rolebinding/missing-subject-name',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['subjects', 0, 'name']);
+
+      const ids = ruleIds(bindingSubject('    kind: User\n'));
+      expect(ids).toContain('schema/required-field');
+      expect(ids).not.toContain('rolebinding/missing-subject-name');
+    });
+
+    it('reports an unknown kind through the enum table and says nothing more', () => {
+      const ids = ruleIds(bindingSubject('    kind: user\n    name: alice\n    namespace: default\n'));
+      expect(ids).toEqual(['enum/invalid-value']);
+    });
+
+    it('rejects an apiGroup on a ServiceAccount subject, whatever it says', () => {
+      const finding = expectRule(
+        bindingSubject(
+          '    kind: ServiceAccount\n    name: reader\n    apiGroup: rbac.authorization.k8s.io\n',
+        ),
+        'rolebinding/invalid-subject-api-group',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.fix?.safe).toBe(true);
+      expect(finding.fix?.title).toBe('Remove apiGroup');
+    });
+
+    it('rejects an apiGroup on a Group subject that is not RBAC\'s own', () => {
+      const finding = expectRule(
+        bindingSubject('    kind: Group\n    name: devs\n    apiGroup: user.example.com\n'),
+        'rolebinding/invalid-subject-api-group',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.fix?.title).toContain('rbac.authorization.k8s.io');
+    });
+
+    it('accepts an apiGroup written as the empty string on any kind', () => {
+      // SetDefaults_Subject rewrites a zero-length api group from the kind, so
+      // an explicit "" is as correct as leaving the field out — on a User and
+      // a Group as much as on the ServiceAccount whose value it becomes.
+      expectRules(
+        bindingSubjects(
+          '  - kind: ServiceAccount\n    name: reader\n    apiGroup: ""\n  - kind: User\n    name: alice\n    apiGroup: ""\n',
+        ),
+        [],
+      );
+    });
+
+    it('accepts an absent apiGroup on every kind, since the default fills it in', () => {
+      expectRules(
+        bindingSubjects(
+          '  - kind: ServiceAccount\n    name: reader\n  - kind: User\n    name: alice\n  - kind: Group\n    name: devs\n',
+        ),
+        [],
+      );
+    });
+
+    it('validates a ServiceAccount subject name as a DNS subdomain', () => {
+      const finding = expectRule(
+        bindingSubject('    kind: ServiceAccount\n    name: Reader\n'),
+        'rolebinding/invalid-subject-name',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.fix?.safe).toBe(false);
+      expect(finding.fix?.ops[0]).toMatchObject({ value: 'reader' });
+    });
+
+    it('leaves a User or Group name unchecked, those coming from the authenticator', () => {
+      expectRules(
+        bindingSubjects('  - kind: User\n    name: Alice@example.com\n  - kind: Group\n    name: system:masters\n'),
+        [],
+      );
+    });
+
+    it('reports a namespace beside a User, which no comparison reads', () => {
+      const finding = expectRule(
+        bindingSubject('    kind: User\n    name: alice\n    namespace: default\n'),
+        'rolebinding/ignored-subject-namespace',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['subjects', 0, 'namespace']);
+      // Which half is the mistake is a real question: a namespace beside a
+      // name often means a ServiceAccount was meant instead.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('says nothing about a ServiceAccount subject without one', () => {
+      // For a RoleBinding the authorizer defaults it to the binding's own
+      // namespace, which is how such a subject is normally written.
+      expectNoRule(
+        bindingSubject('    kind: ServiceAccount\n    name: reader\n'),
+        'rolebinding/ignored-subject-namespace',
+      );
+    });
+
+    it('reports the same subject listed twice', () => {
+      const finding = expectRule(
+        bindingSubjects('  - kind: User\n    name: alice\n  - kind: User\n    name: alice\n'),
+        'rolebinding/duplicate-subject',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['subjects', 1]);
+      expect(finding.message).toContain('entry 1');
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('does not confuse two kinds sharing a name', () => {
+      expectNoRule(
+        bindingSubjects('  - kind: User\n    name: alice\n  - kind: Group\n    name: alice\n'),
+        'rolebinding/duplicate-subject',
+      );
+    });
+
+    it('sees through an ignored namespace, which is not part of the identity', () => {
+      // No branch of appliesToUser reads a User's namespace, so two entries
+      // differing only in one are the same subject to the authorizer.
+      const finding = expectRule(
+        bindingSubjects(
+          '  - kind: User\n    name: alice\n    namespace: default\n  - kind: User\n    name: alice\n',
+        ),
+        'rolebinding/duplicate-subject',
+      );
+      expect(finding.path).toEqual(['subjects', 1]);
+    });
+
+    it('does not confuse two service accounts in different namespaces', () => {
+      expectNoRule(
+        bindingSubjects(
+          '  - kind: ServiceAccount\n    name: reader\n    namespace: web\n  - kind: ServiceAccount\n    name: reader\n    namespace: api\n',
+        ),
+        'rolebinding/duplicate-subject',
+      );
+    });
+
+    it('leaves a subjects of the wrong type to the schema layer', () => {
+      const ids = ruleIds(roleBinding('subjects: everyone\n'));
+      expect(ids).toContain('schema/type');
+      expect(ids).not.toContain('rolebinding/no-subjects');
     });
   });
 });
