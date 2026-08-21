@@ -4,10 +4,10 @@ An online linter for Kubernetes **Pod**, **Deployment**, **StatefulSet**, **Daem
 **Job**, **CronJob**, **Service**, **Ingress**, **IngressClass**, **PersistentVolume**,
 **PersistentVolumeClaim**, **StorageClass**, **NetworkPolicy**, **ConfigMap**, **Secret**,
 **ResourceQuota**, **LimitRange**, **ServiceAccount**, **Role**, **ClusterRole**,
-**RoleBinding** and **HTTPRoute** (Gateway API) manifests. Paste YAML, get told what is wrong, why it is wrong, and — where the
+**RoleBinding**, **ClusterRoleBinding** and **HTTPRoute** (Gateway API) manifests. Paste YAML, get told what is wrong, why it is wrong, and — where the
 answer is unambiguous — apply the fix with one click.
 
-The kind comes from the document itself, so a multi-document manifest holding all twenty-two
+The kind comes from the document itself, so a multi-document manifest holding all twenty-three
 is linted correctly in one pass.
 
 Everything runs in the browser. The manifest never leaves the tab: there is no server, no
@@ -71,6 +71,7 @@ schema, which OpenAPI cannot express:
 | Role | a rule with an empty `verbs`, a missing or empty `apiGroups` or `resources`, and a `nonResourceURLs` that no namespaced rule may carry, plus the several ways a rule the apiserver accepts still grants nothing: a verb that is a near-miss of a real one, a resource written as its `kind` rather than as the lowercase plural a request path uses, a `resourceNames` narrowing a `create` or `deletecollection` (neither of which carries a name for it to match), a `*` in `resourceNames`, where the comparison is a plain string equality, an entry repeated in a list or already covered by a `*` beside it, an empty string where only `apiGroups` gives one a meaning, and a Role with no rules at all |
 | ClusterRole | every check a Role's rules get, since the apiserver validates both with one function, plus what only a cluster-scoped rule can say: a rule naming both non-resource URLs and resources, which the apiserver rejects, a URL that is not an absolute path or whose `*` is not the trailing one (neither can ever match a request path), a verb beside a URL that a non-resource request never carries — those are authorized as the HTTP method, not as one of the eight resource verbs — and, on an `aggregationRule`, rules written beside it that the controller overwrites on its next sync, a rule that lists no selectors and so aggregates nothing, and an empty selector, which matches every ClusterRole in the cluster rather than none |
 | RoleBinding | a `roleRef` naming an API group other than `rbac.authorization.k8s.io`, or a role whose name is not a path segment, and a subject with an empty name, an `apiGroup` disagreeing with its `kind` (a ServiceAccount subject may carry none at all) or a ServiceAccount name that is not a DNS subdomain — plus what the apiserver stores and the authorizer then ignores: a `namespace` beside a `User` or `Group` subject, which no comparison reads, the same subject listed twice, and a binding with no subjects, which grants its role to nobody |
+| ClusterRoleBinding | every check a RoleBinding gets, the two validators being the same function written out twice, plus what follows from this one being attached to no namespace: a `roleRef` naming a `Role`, whose rules would have nowhere to be interpreted, and a `ServiceAccount` subject with no `namespace` — a RoleBinding lends its own, and this has none to lend. A `metadata.namespace` is rejected outright, the kind being cluster-scoped |
 | HTTPRoute | two `parentRefs` to the same parent without a `sectionName` each, or with the same one twice, more than 128 matches across all rules, a `RequestRedirect` filter alongside `backendRefs` on the same rule, a `ReplacePrefixMatch` rewrite on a rule without exactly one `PathPrefix` match, a Service `backendRef` (the default `group`/`kind`) with no `port`, a filter list with both a `RequestRedirect` and a `URLRewrite`, or the same filter type twice, a filter whose populated field disagrees with its `type`, a `requestMirror` setting both `percent` and `fraction` or a `fraction` whose numerator exceeds its denominator, a path modifier whose populated field disagrees with its `type`, a `backendRequest` timeout longer than `request`, and a match path containing `//`, `/./`, `/../` or an escaped slash |
 
 The PodSpec rows apply to every kind that carries a pod template: there is one PodSpec rule
@@ -80,7 +81,7 @@ are folded into that: the controller adds one Pod volume per template, so mounti
 recognised as valid even though `spec.template.spec.volumes` never mentions it. A Service, an
 Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a StorageClass, a
 NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a ServiceAccount, a Role,
-a ClusterRole, a RoleBinding and an HTTPRoute have no pod template at all, so those rules do not run for them — each is
+a ClusterRole, a RoleBinding, a ClusterRoleBinding and an HTTPRoute have no pod template at all, so those rules do not run for them — each is
 checked by the schema, the name and label rules every object gets, and its own row above.
 
 Hovering any field shows its type, whether it is required, and its description straight from

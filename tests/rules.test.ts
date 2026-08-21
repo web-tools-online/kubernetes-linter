@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   VALID_CLUSTER_ROLE,
+  VALID_CLUSTER_ROLE_BINDING,
   VALID_CONFIGMAP,
   VALID_CRONJOB,
   VALID_DAEMONSET,
@@ -24,8 +25,11 @@ import {
   aggregatedClusterRole,
   bindingSubject,
   bindingSubjects,
+  clusterBindingSubject,
+  clusterBindingSubjects,
   clusterPolicyRule,
   clusterRole,
+  clusterRoleBinding,
   configMap,
   configMapData,
   cronJob,
@@ -6089,6 +6093,197 @@ describe('RoleBinding rules', () => {
       const ids = ruleIds(roleBinding('subjects: everyone\n'));
       expect(ids).toContain('schema/type');
       expect(ids).not.toContain('rolebinding/no-subjects');
+    });
+  });
+});
+
+describe('ClusterRoleBinding rules', () => {
+  it('lints a valid ClusterRoleBinding cleanly', () => {
+    expectRules(VALID_CLUSTER_ROLE_BINDING, []);
+  });
+
+  it('validates the name as a path segment, exactly as a RoleBinding does', () => {
+    expectRules(
+      `apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: system:node-reader\nroleRef:\n  kind: ClusterRole\n  name: node-reader\nsubjects:\n  - kind: User\n    name: alice\n`,
+      [],
+    );
+  });
+
+  it('forbids a metadata.namespace, the kind being cluster-scoped', () => {
+    const finding = expectRule(
+      `apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: read-nodes\n  namespace: default\nroleRef:\n  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: node-reader\nsubjects:\n  - kind: User\n    name: alice\n`,
+      'meta/namespace-not-allowed',
+    );
+    expect(finding.severity).toBe('error');
+    expect(finding.path).toEqual(['metadata', 'namespace']);
+  });
+
+  describe('roleRef', () => {
+    it('reports a Role, which only a RoleBinding may name', () => {
+      const finding = expectRule(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: node-reader\n',
+        ),
+        'clusterrolebinding/namespaced-role-ref',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.path).toEqual(['roleRef', 'kind']);
+      // Pointing at a ClusterRole of the same name is a different object, and
+      // the other correction is to the document's own kind.
+      expect(finding.fix?.safe).toBe(false);
+    });
+
+    it('leaves a Role alone on a RoleBinding, where it is the ordinary case', () => {
+      expectNoRule(VALID_ROLE_BINDING, 'clusterrolebinding/namespaced-role-ref');
+    });
+
+    it('adds nothing to a kind the enum table has already rejected', () => {
+      const ids = ruleIds(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRoleBinding\n  name: node-reader\n',
+        ),
+      );
+      expect(ids).toContain('enum/invalid-value');
+      expect(ids).not.toContain('clusterrolebinding/namespaced-role-ref');
+    });
+
+    it('accepts an absent apiGroup, which the apiserver defaults', () => {
+      // SetDefaults_ClusterRoleBinding is SetDefaults_RoleBinding's twin.
+      expectRules(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  kind: ClusterRole\n  name: node-reader\n',
+        ),
+        [],
+      );
+    });
+
+    it('reports an apiGroup that is not RBAC\'s own, under the shared id', () => {
+      const finding = expectRule(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io/v1\n  kind: ClusterRole\n  name: node-reader\n',
+        ),
+        'rolebinding/invalid-role-ref-api-group',
+      );
+      expect(finding.severity).toBe('error');
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('reports an empty roleRef name under the shared id', () => {
+      const finding = expectRule(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: ""\n',
+        ),
+        'rolebinding/missing-role-ref-name',
+      );
+      expect(finding.severity).toBe('error');
+    });
+
+    it('reports a roleRef name that is not a path segment, under the shared id', () => {
+      const finding = expectRule(
+        clusterRoleBinding(
+          'subjects:\n  - kind: User\n    name: alice\n',
+          '  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: node/reader\n',
+        ),
+        'rolebinding/invalid-role-ref-name',
+      );
+      expect(finding.path).toEqual(['roleRef', 'name']);
+    });
+  });
+
+  describe('subjects', () => {
+    it('requires a namespace on a ServiceAccount subject', () => {
+      // ValidateRoleBindingSubject is handed isNamespaced=false here, and this
+      // is the single branch that reads it.
+      const finding = expectRule(
+        clusterBindingSubject('    kind: ServiceAccount\n    name: reader\n'),
+        'clusterrolebinding/missing-subject-namespace',
+      );
+      expect(finding.severity).toBe('error');
+      // With no key to anchor on the finding lands on the subject itself.
+      expect(finding.path).toEqual(['subjects', 0]);
+      // Which namespace was meant cannot be read off the document.
+      expect(finding.fix).toBeUndefined();
+    });
+
+    it('treats a namespace written as the empty string as missing', () => {
+      const finding = expectRule(
+        clusterBindingSubject('    kind: ServiceAccount\n    name: reader\n    namespace: ""\n'),
+        'clusterrolebinding/missing-subject-namespace',
+      );
+      expect(finding.path).toEqual(['subjects', 0, 'namespace']);
+    });
+
+    it('accepts a ServiceAccount subject that names one', () => {
+      expectRules(
+        clusterBindingSubject(
+          '    kind: ServiceAccount\n    name: reader\n    namespace: default\n',
+        ),
+        [],
+      );
+    });
+
+    it('asks for no namespace on a User or a Group, neither of which lives in one', () => {
+      expectNoRule(
+        clusterBindingSubjects('  - kind: User\n    name: alice\n  - kind: Group\n    name: devs\n'),
+        'clusterrolebinding/missing-subject-namespace',
+      );
+    });
+
+    it('says nothing about it on a RoleBinding, which lends its own namespace', () => {
+      expectNoRule(
+        bindingSubject('    kind: ServiceAccount\n    name: reader\n'),
+        'clusterrolebinding/missing-subject-namespace',
+      );
+    });
+
+    it('still reports a namespace beside a User, under the shared id', () => {
+      const finding = expectRule(
+        clusterBindingSubject('    kind: User\n    name: alice\n    namespace: default\n'),
+        'rolebinding/ignored-subject-namespace',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['subjects', 0, 'namespace']);
+    });
+
+    it('still reports a ServiceAccount subject carrying an apiGroup', () => {
+      const finding = expectRule(
+        clusterBindingSubject(
+          '    kind: ServiceAccount\n    name: reader\n    namespace: default\n    apiGroup: rbac.authorization.k8s.io\n',
+        ),
+        'rolebinding/invalid-subject-api-group',
+      );
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('still reports a ServiceAccount name that is not a DNS subdomain', () => {
+      const finding = expectRule(
+        clusterBindingSubject(
+          '    kind: ServiceAccount\n    name: Reader\n    namespace: default\n',
+        ),
+        'rolebinding/invalid-subject-name',
+      );
+      expect(finding.severity).toBe('error');
+    });
+
+    it('still reports the same subject listed twice', () => {
+      const finding = expectRule(
+        clusterBindingSubjects(
+          '  - kind: User\n    name: alice\n  - kind: User\n    name: alice\n',
+        ),
+        'rolebinding/duplicate-subject',
+      );
+      expect(finding.path).toEqual(['subjects', 1]);
+    });
+
+    it('names the kind it is checking when there are no subjects', () => {
+      const finding = expectRule(clusterRoleBinding(''), 'rolebinding/no-subjects');
+      expect(finding.severity).toBe('warning');
+      expect(finding.message).toContain('ClusterRoleBinding');
     });
   });
 });

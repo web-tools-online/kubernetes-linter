@@ -883,4 +883,29 @@ subjects:
     apiGroup: rbac.authorization.k8s.io
 `,
   },
+  {
+    id: 'clusterrolebinding',
+    label: 'A ClusterRoleBinding with problems',
+    blurb:
+      'A namespace on a kind that has none, a roleRef naming a Role no cluster-wide binding can bind, and a ServiceAccount subject leaving out the namespace only a RoleBinding could have supplied.',
+    yaml: `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: read-nodes
+  # A ClusterRoleBinding is attached to no namespace, so this is not merely
+  # unusual but rejected outright.
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  # A Role's rules are written to be read inside its own namespace, and this
+  # binding has none to read them in.
+  kind: Role
+  name: node-reader
+subjects:
+  # A RoleBinding would fill this in from its own namespace. Nothing here can,
+  # so the apiserver asks for it.
+  - kind: ServiceAccount
+    name: reader
+`,
+  },
 ];
