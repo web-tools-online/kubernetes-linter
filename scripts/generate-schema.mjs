@@ -94,6 +94,7 @@ const ROOTS = {
   Role: 'io.k8s.api.rbac.v1.Role',
   ClusterRole: 'io.k8s.api.rbac.v1.ClusterRole',
   RoleBinding: 'io.k8s.api.rbac.v1.RoleBinding',
+  ClusterRoleBinding: 'io.k8s.api.rbac.v1.ClusterRoleBinding',
 };
 
 /**

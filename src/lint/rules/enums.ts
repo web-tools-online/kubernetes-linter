@@ -220,7 +220,7 @@ const ENUMS: Record<string, EnumSpec> = {
   // in rules/rolebinding.ts — which is left with what turns on them.
   'RoleRef.kind': {
     values: ['Role', 'ClusterRole'],
-    note: 'A RoleBinding may name either: a ClusterRole bound this way grants its rules in the binding\'s namespace alone, which is how one definition comes to be reused across namespaces.',
+    note: 'A RoleBinding may name either: a ClusterRole bound this way grants its rules in the binding\'s namespace alone, which is how one definition comes to be reused across namespaces. A ClusterRoleBinding may name only a ClusterRole, which is narrower than this table can say — one entry serves both bindings — so rules/clusterrolebinding.ts reports the difference.',
   },
   'Subject.kind': {
     values: ['ServiceAccount', 'User', 'Group'],

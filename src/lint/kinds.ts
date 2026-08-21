@@ -1,5 +1,6 @@
 import type { Path } from './types.js';
 import type { Rule } from './rules/context.js';
+import { clusterRoleBindingRule } from './rules/clusterrolebinding.js';
 import { clusterRoleRule } from './rules/clusterrole.js';
 import { configMapRule } from './rules/configmap.js';
 import { cronJobRule } from './rules/cronjob.js';
@@ -191,5 +192,11 @@ export const KINDS: Record<string, KindDescriptor> = {
     kind: 'RoleBinding',
     nameFormat: 'path-segment',
     rules: [roleBindingRule],
+  },
+  ClusterRoleBinding: {
+    kind: 'ClusterRoleBinding',
+    nameFormat: 'path-segment',
+    clusterScoped: true,
+    rules: [clusterRoleBindingRule],
   },
 };

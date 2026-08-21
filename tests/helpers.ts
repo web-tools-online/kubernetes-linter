@@ -869,3 +869,41 @@ export function bindingSubjects(subjectsFragment: string): string {
 export function bindingSubject(fieldsFragment: string): string {
   return bindingSubjects(fieldsFragment.replace(/^ {4}/, '  - '));
 }
+
+/** A minimal valid ClusterRoleBinding that individual tests mutate. */
+export const VALID_CLUSTER_ROLE_BINDING = `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: read-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: node-reader
+subjects:
+  - kind: ServiceAccount
+    name: reader
+    namespace: default
+`;
+
+/**
+ * Build a ClusterRoleBinding from a fragment of its top-level fields. The
+ * RoleBinding builder's twin, differing where the kinds do: no
+ * `metadata.namespace`, since the kind is cluster-scoped, and a roleRef
+ * defaulting to a ClusterRole, which is the only thing it may bind.
+ */
+export function clusterRoleBinding(
+  fieldsFragment: string,
+  roleRefFragment = '  apiGroup: rbac.authorization.k8s.io\n  kind: ClusterRole\n  name: node-reader\n',
+): string {
+  return `apiVersion: rbac.authorization.k8s.io/v1\nkind: ClusterRoleBinding\nmetadata:\n  name: read-nodes\nroleRef:\n${roleRefFragment}${fieldsFragment}`;
+}
+
+/** A ClusterRoleBinding carrying the given subjects, each entry indented four spaces. */
+export function clusterBindingSubjects(subjectsFragment: string): string {
+  return clusterRoleBinding(`subjects:\n${subjectsFragment}`);
+}
+
+/** A ClusterRoleBinding with one subject, written from the fragment's own fields. */
+export function clusterBindingSubject(fieldsFragment: string): string {
+  return clusterBindingSubjects(fieldsFragment.replace(/^ {4}/, '  - '));
+}

@@ -24,6 +24,7 @@ import {
   VALID_CLUSTER_ROLE,
   VALID_ROLE,
   VALID_ROLE_BINDING,
+  VALID_CLUSTER_ROLE_BINDING,
   VALID_SECRET,
   VALID_SERVICE,
   VALID_SERVICE_ACCOUNT,
@@ -48,6 +49,7 @@ import {
   policyRule,
   urlRule,
   bindingSubject,
+  clusterRoleBinding,
   resourceQuota,
   role,
   secretData,
@@ -124,6 +126,7 @@ describe('bundled versions', () => {
         'Role',
         'ClusterRole',
         'RoleBinding',
+        'ClusterRoleBinding',
         'HTTPRoute',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
@@ -148,6 +151,9 @@ describe('bundled versions', () => {
         'rbac.authorization.k8s.io/v1',
       );
       expect(schema.for('RoleBinding')?.apiVersion, version).toBe(
+        'rbac.authorization.k8s.io/v1',
+      );
+      expect(schema.for('ClusterRoleBinding')?.apiVersion, version).toBe(
         'rbac.authorization.k8s.io/v1',
       );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
@@ -474,7 +480,7 @@ describe('bundled versions', () => {
   });
 
   it('lints a valid RoleBinding cleanly on every version', async () => {
-    // The twenty-first root, and the last of the RBAC three: it shares
+    // The twenty-first root, and the third of the RBAC four: it shares
     // ObjectMeta with everything and nothing else with Role or ClusterRole, so
     // it grows the closure by RoleBinding, RoleRef and Subject alone.
     for (const version of AVAILABLE_VERSIONS) {
@@ -493,6 +499,37 @@ describe('bundled versions', () => {
     );
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'rolebinding/ignored-subject-namespace',
+      ]);
+    }
+  });
+
+  it('lints a valid ClusterRoleBinding cleanly on every version', async () => {
+    // The twenty-second root and the cheapest of them all: RoleRef and Subject
+    // are already in the closure by way of RoleBinding, so it grows the bundle
+    // by its own definition and nothing else on any version.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_CLUSTER_ROLE_BINDING, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a ClusterRoleBinding the same way on every version', async () => {
+    // Both of the things this kind adds to a RoleBinding come from a switch
+    // and a boolean argument in the validator rather than from a field, so
+    // neither can vary with the schema: rbac/v1 has been served unchanged
+    // since 1.8, and `subjects` being an atomic list from 1.30 changes nothing
+    // — atomic is not the map type that would make layer 1 look for
+    // duplicates, so the module's own duplicate check is the only one on every
+    // version.
+    const yaml = clusterRoleBinding(
+      'subjects:\n  - kind: ServiceAccount\n    name: reader\n  - kind: User\n    name: alice\n    namespace: default\n',
+      '  apiGroup: rbac.authorization.k8s.io\n  kind: Role\n  name: node-reader\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'clusterrolebinding/namespaced-role-ref',
+        'clusterrolebinding/missing-subject-namespace',
         'rolebinding/ignored-subject-namespace',
       ]);
     }

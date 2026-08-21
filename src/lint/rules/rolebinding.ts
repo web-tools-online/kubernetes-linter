@@ -22,7 +22,7 @@ const SUBJECT_KINDS = [SERVICE_ACCOUNT, 'User', 'Group'];
 
 /**
  * The checks worth making on a RoleBinding. `ValidateRoleBinding` is the
- * shortest validator of the three RBAC kinds here — the object's metadata, the
+ * shortest validator of the four RBAC kinds here — the object's metadata, the
  * three fields of `roleRef`, then `ValidateRoleBindingSubject` per entry — and
  * it is unusual in how much of it turns on *defaulting* rather than on the
  * document: `SetDefaults_RoleBinding` fills an absent `roleRef.apiGroup` in
@@ -54,7 +54,16 @@ const SUBJECT_KINDS = [SERVICE_ACCOUNT, 'User', 'Group'];
  * reported: the authorizer defaults it to the binding's own namespace, which
  * is the idiomatic way to write one.
  *
- * Like the two RBAC kinds before it a RoleBinding has no `spec` — `roleRef`
+ * Almost all of this is shared with `clusterrolebinding.ts` rather than
+ * duplicated. Upstream writes the two validators out separately, but they are
+ * the same function twice over and differ only in which kinds a `roleRef` may
+ * name and in the `isNamespaced` flag they hand the one
+ * `ValidateRoleBindingSubject` they share — so `checkBinding` takes a
+ * `RoleBindingOwner` carrying those two branches and everything else runs
+ * unchanged for either kind, keeping its `rolebinding/*` id there exactly as a
+ * ClusterRole's rules keep their `role/*` ones.
+ *
+ * Like the three RBAC kinds before it a RoleBinding has no `spec` — `roleRef`
  * and `subjects` hang directly off the document — so this module addresses
  * `ctx.doc`, and its name is a path segment rather than a DNS name of any
  * sort, which the descriptor's `nameFormat` says and `metadata.ts` reads.
@@ -69,14 +78,71 @@ const SUBJECT_KINDS = [SERVICE_ACCOUNT, 'User', 'Group'];
 export const roleBindingRule: Rule = {
   id: 'rolebinding/fields',
   run(ctx: RuleContext) {
-    checkRoleRef(ctx);
-    checkSubjects(ctx);
+    checkBinding(ctx, ROLE_BINDING);
   },
 };
 
+/**
+ * The kind a binding belongs to. `ValidateRoleBinding` and
+ * `ValidateClusterRoleBinding` are the same function written twice — the same
+ * api group check, the same name check, the same walk over the subjects — and
+ * they part in exactly two places: which kinds the `roleRef` may name, and the
+ * `isNamespaced` flag handed to the one `ValidateRoleBindingSubject` they
+ * share, which is read in a single branch. So those two are all a caller has
+ * to bring, along with the noun its messages name.
+ *
+ * A finding from a ClusterRoleBinding therefore keeps its `rolebinding/*` id,
+ * exactly as a ClusterRole's rules keep their `role/*` ones: the id names the
+ * validator a check comes from, not the kind the document declares. The two
+ * branches below are the exception, being the parts that are genuinely a
+ * ClusterRoleBinding's own, and they are `clusterrolebinding/*`.
+ */
+export interface RoleBindingOwner {
+  /** How the kind names itself in a message. */
+  kind: string;
+  /**
+   * A `roleRef.kind` the enum table already accepts, measured against what
+   * this binding may actually bind. A RoleBinding takes either of them, so it
+   * has nothing left to say; a ClusterRoleBinding takes only a ClusterRole,
+   * which makes "Role" a value the table passes and the apiserver rejects.
+   */
+  checkRoleRefKind(ctx: RuleContext, kind: string, path: Path): void;
+  /**
+   * A ServiceAccount subject's namespace. This is the `isNamespaced` branch:
+   * a RoleBinding lets it be omitted, since the authorizer reads the binding's
+   * own namespace in that case, while a ClusterRoleBinding has no namespace to
+   * lend and so requires it.
+   */
+  checkServiceAccountNamespace(
+    ctx: RuleContext,
+    subject: Record<string, unknown>,
+    base: Path,
+  ): void;
+}
+
+const ROLE_BINDING: RoleBindingOwner = {
+  kind: 'RoleBinding',
+  // Both values in the enum table are bindable here, so a kind that got this
+  // far is right and an unrecognised one is already enum/invalid-value's.
+  checkRoleRefKind() {},
+  // An absent namespace is the idiom rather than a mistake: the authorizer
+  // defaults it to the binding's own, which is how a binding to a
+  // ServiceAccount sitting beside it is normally written.
+  checkServiceAccountNamespace() {},
+};
+
+/**
+ * Shared by both binding kinds. `clusterrolebinding.ts` calls this with an
+ * owner of its own rather than repeating any of it.
+ */
+export function checkBinding(ctx: RuleContext, owner: RoleBindingOwner): void {
+  checkRoleRef(ctx, owner);
+  checkSubjects(ctx, owner);
+}
+
 /* roleRef, the half that says which rules */
 
-function checkRoleRef(ctx: RuleContext): void {
+function checkRoleRef(ctx: RuleContext, owner: RoleBindingOwner): void {
   // An absent roleRef is schema/required-field, and one of the wrong shape is
   // schema/type; either way there is nothing here to read.
   const roleRef = asObject(ctx.doc['roleRef']);
@@ -84,8 +150,13 @@ function checkRoleRef(ctx: RuleContext): void {
 
   checkRoleRefApiGroup(ctx, roleRef);
   checkRoleRefName(ctx, roleRef);
+
   // roleRef.kind is Subject.kind's neighbour in the enum table, so an
-  // unrecognised one has already been reported as enum/invalid-value.
+  // unrecognised one has already been reported as enum/invalid-value. What is
+  // left is a value the table accepts that this binding still may not name,
+  // which only a ClusterRoleBinding has.
+  const kind = asString(roleRef['kind']);
+  if (kind !== undefined) owner.checkRoleRefKind(ctx, kind, ['roleRef', 'kind']);
 }
 
 function checkRoleRefApiGroup(ctx: RuleContext, roleRef: Record<string, unknown>): void {
@@ -147,7 +218,7 @@ function checkRoleRefName(ctx: RuleContext, roleRef: Record<string, unknown>): v
 
 /* subjects, the half that says who */
 
-function checkSubjects(ctx: RuleContext): void {
+function checkSubjects(ctx: RuleContext, owner: RoleBindingOwner): void {
   const declared = ctx.doc['subjects'];
   // A subjects that is neither a list nor absent is layer 1's to report. A key
   // written with no value decodes to null, which the apiserver reads as the
@@ -160,7 +231,7 @@ function checkSubjects(ctx: RuleContext): void {
       ruleId: 'rolebinding/no-subjects',
       severity: 'warning',
       path: 'subjects' in ctx.doc ? ['subjects'] : [],
-      message: 'This RoleBinding grants nothing: it has no subjects.',
+      message: `This ${owner.kind} grants nothing: it has no subjects.`,
       explanation:
         'A binding exists to connect a role\'s rules to the identities they apply to, and this list is those identities — so with none of them the role below is never consulted for anyone. The apiserver stores the binding without complaint and it stays inert for the life of the object.',
       docsUrl: SUBJECTS_DOCS,
@@ -174,12 +245,13 @@ function checkSubjects(ctx: RuleContext): void {
   subjects.forEach((entry, index) => {
     const subject = asObject(entry);
     if (!subject) return;
-    checkSubject(ctx, subject, ['subjects', index], index, seen);
+    checkSubject(ctx, owner, subject, ['subjects', index], index, seen);
   });
 }
 
 function checkSubject(
   ctx: RuleContext,
+  owner: RoleBindingOwner,
   subject: Record<string, unknown>,
   base: Path,
   index: number,
@@ -209,10 +281,11 @@ function checkSubject(
   checkSubjectApiGroup(ctx, subject, base, kind);
 
   if (kind === SERVICE_ACCOUNT) {
-    // An absent namespace is not reported: for a RoleBinding the authorizer
-    // defaults it to the binding's own namespace, which is how a binding to a
-    // ServiceAccount beside it is normally written.
     if (name !== undefined && name !== '') checkServiceAccountName(ctx, name, [...base, 'name']);
+    // Whether an absent namespace is a mistake is the one thing
+    // ValidateRoleBindingSubject reads its isNamespaced flag for, so it is the
+    // owner's to answer rather than this function's.
+    owner.checkServiceAccountNamespace(ctx, subject, base);
   } else {
     checkIgnoredNamespace(ctx, subject, base, kind);
   }
