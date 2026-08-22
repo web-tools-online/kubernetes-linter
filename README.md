@@ -4,10 +4,11 @@ An online linter for Kubernetes **Pod**, **Deployment**, **StatefulSet**, **Daem
 **Job**, **CronJob**, **Service**, **Ingress**, **IngressClass**, **PersistentVolume**,
 **PersistentVolumeClaim**, **StorageClass**, **NetworkPolicy**, **ConfigMap**, **Secret**,
 **ResourceQuota**, **LimitRange**, **ServiceAccount**, **Role**, **ClusterRole**,
-**RoleBinding**, **ClusterRoleBinding** and **HTTPRoute** (Gateway API) manifests. Paste YAML, get told what is wrong, why it is wrong, and — where the
+**RoleBinding**, **ClusterRoleBinding** and the Gateway API's **HTTPRoute** and **Gateway**
+manifests. Paste YAML, get told what is wrong, why it is wrong, and — where the
 answer is unambiguous — apply the fix with one click.
 
-The kind comes from the document itself, so a multi-document manifest holding all twenty-three
+The kind comes from the document itself, so a multi-document manifest holding all twenty-four
 is linted correctly in one pass.
 
 Everything runs in the browser. The manifest never leaves the tab: there is no server, no
@@ -18,10 +19,10 @@ Covers **Kubernetes v1.25 through v1.36**, selectable from the header. The schem
 chosen version decides what counts as a valid field, so linting a manifest destined for an
 older cluster reports what that cluster would actually reject.
 
-HTTPRoute is the one kind that does not track that picker: Gateway API ships as CRDs,
-installed independently of the cluster, so its schema is generated from one pinned Gateway
-API release (currently v1.4.0) and checked the same way regardless of the Kubernetes version
-selected.
+HTTPRoute and Gateway are the two kinds that do not track that picker: Gateway API ships as
+CRDs, installed independently of the cluster, so their schemas are generated from one pinned
+Gateway API release (currently v1.4.0) and checked the same way regardless of the Kubernetes
+version selected.
 
 ## What it checks
 
@@ -73,6 +74,7 @@ schema, which OpenAPI cannot express:
 | RoleBinding | a `roleRef` naming an API group other than `rbac.authorization.k8s.io`, or a role whose name is not a path segment, and a subject with an empty name, an `apiGroup` disagreeing with its `kind` (a ServiceAccount subject may carry none at all) or a ServiceAccount name that is not a DNS subdomain — plus what the apiserver stores and the authorizer then ignores: a `namespace` beside a `User` or `Group` subject, which no comparison reads, the same subject listed twice, and a binding with no subjects, which grants its role to nobody |
 | ClusterRoleBinding | every check a RoleBinding gets, the two validators being the same function written out twice, plus what follows from this one being attached to no namespace: a `roleRef` naming a `Role`, whose rules would have nowhere to be interpreted, and a `ServiceAccount` subject with no `namespace` — a RoleBinding lends its own, and this has none to lend. A `metadata.namespace` is rejected outright, the kind being cluster-scoped |
 | HTTPRoute | two `parentRefs` to the same parent without a `sectionName` each, or with the same one twice, more than 128 matches across all rules, a `RequestRedirect` filter alongside `backendRefs` on the same rule, a `ReplacePrefixMatch` rewrite on a rule without exactly one `PathPrefix` match, a Service `backendRef` (the default `group`/`kind`) with no `port`, a filter list with both a `RequestRedirect` and a `URLRewrite`, or the same filter type twice, a filter whose populated field disagrees with its `type`, a `requestMirror` setting both `percent` and `fraction` or a `fraction` whose numerator exceeds its denominator, a path modifier whose populated field disagrees with its `type`, a `backendRequest` timeout longer than `request`, and a match path containing `//`, `/./`, `/../` or an escaped slash |
+| Gateway | an address whose `value` disagrees with its `type` — a hostname where the default `IPAddress` type expects a literal address, or a name that is not a DNS subdomain — the same address asked for twice, an infrastructure `labels` or `annotations` key that is not a qualified name, a `tls` block on an HTTP, TCP or UDP listener, which terminates none, an HTTPS listener whose `tls.mode` is `Passthrough`, leaving it unable to read the request it would route on, a terminating listener (the default mode) naming neither `certificateRefs` nor `options` to source a certificate from, a `hostname` on a TCP or UDP listener, which sees neither SNI nor a Host header, and two listeners agreeing on port, protocol and hostname, the second of which nothing would ever reach |
 
 The PodSpec rows apply to every kind that carries a pod template: there is one PodSpec rule
 set, addressed relative to whichever kind the document declares, so it reports against
@@ -81,7 +83,8 @@ are folded into that: the controller adds one Pod volume per template, so mounti
 recognised as valid even though `spec.template.spec.volumes` never mentions it. A Service, an
 Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a StorageClass, a
 NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a ServiceAccount, a Role,
-a ClusterRole, a RoleBinding, a ClusterRoleBinding and an HTTPRoute have no pod template at all, so those rules do not run for them — each is
+a ClusterRole, a RoleBinding, a ClusterRoleBinding, an HTTPRoute and a Gateway have no pod
+template at all, so those rules do not run for them — each is
 checked by the schema, the name and label rules every object gets, and its own row above.
 
 Hovering any field shows its type, whether it is required, and its description straight from
@@ -171,12 +174,12 @@ name to validate. Each kind keeps its own rule module — `rules/deployment.ts`,
 `rules/service.ts`, `rules/ingress.ts`, `rules/ingressclass.ts`, `rules/persistentvolume.ts`,
 `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`, `rules/networkpolicy.ts`,
 `rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts`,
-`rules/httproute.ts` — since what the
+`rules/httproute.ts`, `rules/gateway.ts` — since what the
 apiserver checks beyond the pod template is particular to it. StorageClass, ConfigMap and Secret
 are the three kinds with no `spec` at all: their fields hang off the document root, so their
-modules address `ctx.doc` directly where every other kind's addresses `ctx.doc['spec']`. HTTPRoute's checks come from its CRD's `x-kubernetes-validations` (CEL) rules rather than a
-hand-written Go validator, reimplemented by hand since layer 1 cannot evaluate CEL; everything
-that CRD's own OpenAPI schema already states — every `enum`, `pattern`, `minLength`/`maxLength`
+modules address `ctx.doc` directly where every other kind's addresses `ctx.doc['spec']`. The two Gateway API kinds' checks come from their CRDs' `x-kubernetes-validations` (CEL) rules
+rather than a hand-written Go validator, reimplemented by hand since layer 1 cannot evaluate
+CEL; everything those CRDs' own OpenAPI schemas already state — every `enum`, `pattern`, `minLength`/`maxLength`
 and `minItems`/`maxItems` on it — is instead covered generically, by the same schema layer every
 other kind uses. CronJob and
 PersistentVolumeClaim are the exceptions by design: a CronJob's `spec.jobTemplate.spec` is a

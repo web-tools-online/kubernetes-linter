@@ -6,6 +6,7 @@ import { configMapRule } from './rules/configmap.js';
 import { cronJobRule } from './rules/cronjob.js';
 import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
+import { gatewayRule } from './rules/gateway.js';
 import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
@@ -133,6 +134,10 @@ export const KINDS: Record<string, KindDescriptor> = {
   HTTPRoute: {
     kind: 'HTTPRoute',
     rules: [httpRouteRule],
+  },
+  Gateway: {
+    kind: 'Gateway',
+    rules: [gatewayRule],
   },
   IngressClass: {
     kind: 'IngressClass',

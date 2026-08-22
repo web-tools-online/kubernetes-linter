@@ -115,7 +115,7 @@ function card(finding: LocatedFinding, callbacks: PanelCallbacks): HTMLElement {
   return element;
 }
 
-/** Most `docsUrl`s point at kubernetes.io; HTTPRoute's point at the Gateway API docs instead. */
+/** Most `docsUrl`s point at kubernetes.io; the Gateway API kinds' point at the Gateway API docs instead. */
 function docsLabel(url: string): string {
   try {
     return new URL(url).hostname.endsWith('gateway-api.sigs.k8s.io') ? 'Gateway API docs' : 'Kubernetes docs';

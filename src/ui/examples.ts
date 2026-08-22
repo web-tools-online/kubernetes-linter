@@ -908,4 +908,51 @@ subjects:
     name: reader
 `,
   },
+  {
+    id: 'gateway',
+    label: 'A Gateway with problems',
+    blurb:
+      'A hostname written where an IP address is expected, a tls block on a plaintext listener, an HTTPS listener asking to pass TLS through, a terminating listener with no certificate, and two listeners nothing could tell apart.',
+    yaml: `apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: web-gateway
+spec:
+  gatewayClassName: example
+  addresses:
+    # The address type defaults to IPAddress, whose value has to be a literal
+    # address — a name needs "type: Hostname" beside it.
+    - value: gateway.example.com
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      # An HTTP listener is not TLS-terminated, so there is no handshake for
+      # any of this to apply to.
+      tls:
+        certificateRefs:
+          - name: web-cert
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        # Passthrough leaves the Gateway unable to read the request it would
+        # have to route on; a listener that passes TLS through speaks TLS.
+        mode: Passthrough
+    - name: https-alt
+      protocol: HTTPS
+      port: 8443
+      # The mode defaults to Terminate, which cannot complete a handshake
+      # without a certificate to complete it with.
+      tls: {}
+    - name: https-dup
+      protocol: HTTPS
+      port: 8443
+      # Same port, protocol and (absent) hostname as the listener above, so
+      # nothing would ever be routed by this one.
+      tls:
+        certificateRefs:
+          - name: web-cert
+`,
+  },
 ];

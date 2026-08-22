@@ -6,6 +6,7 @@ import {
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
+  VALID_GATEWAY,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -42,6 +43,8 @@ import {
   expectRule,
   expectRules,
   findings,
+  gateway,
+  gatewayWithListener,
   httpRoute,
   httpRouteWithRule,
   ingress,
@@ -6284,6 +6287,185 @@ describe('ClusterRoleBinding rules', () => {
       const finding = expectRule(clusterRoleBinding(''), 'rolebinding/no-subjects');
       expect(finding.severity).toBe('warning');
       expect(finding.message).toContain('ClusterRoleBinding');
+    });
+  });
+});
+
+describe('gateway', () => {
+  it('accepts a valid Gateway', () => {
+    expectRules(VALID_GATEWAY, []);
+  });
+
+  describe('addresses', () => {
+    it('rejects a hostname written as an IPAddress, which is the default type', () => {
+      const finding = expectRule(
+        gateway('  addresses:\n    - value: gateway.example.com\n' + '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n'),
+        'gateway/invalid-address-value',
+      );
+      expect(finding.path).toEqual(['spec', 'addresses', 0, 'value']);
+    });
+
+    it('rejects an invalid hostname', () => {
+      expectRule(
+        gateway(
+          '  addresses:\n    - type: Hostname\n      value: Gateway.Example.Com\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        'gateway/invalid-address-value',
+      );
+    });
+
+    it('accepts a wildcard hostname and a literal address', () => {
+      expectRules(
+        gateway(
+          '  addresses:\n    - type: Hostname\n      value: "*.example.com"\n' +
+            '    - value: 10.0.0.1\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        [],
+      );
+    });
+
+    it('rejects the same address asked for twice', () => {
+      const finding = expectRule(
+        gateway(
+          '  addresses:\n    - value: 10.0.0.1\n    - value: 10.0.0.1\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        'gateway/duplicate-address',
+      );
+      expect(finding.path).toEqual(['spec', 'addresses', 1, 'value']);
+    });
+
+    it('does not flag the same value under two different types', () => {
+      expectRules(
+        gateway(
+          '  addresses:\n    - type: NamedAddress\n      value: shared\n' +
+            '    - type: Hostname\n      value: shared\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('infrastructure', () => {
+    it('reports an invalid label key', () => {
+      const finding = expectRule(
+        gateway(
+          '  infrastructure:\n    labels:\n      "not a key": web\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        'meta/invalid-label-key',
+      );
+      expect(finding.path).toEqual(['spec', 'infrastructure', 'labels', 'not a key']);
+    });
+
+    it('accepts a prefixed annotation key', () => {
+      expectRules(
+        gateway(
+          '  infrastructure:\n    annotations:\n      example.com/owner: platform\n' +
+            '  listeners:\n    - name: http\n      protocol: HTTP\n      port: 80\n',
+        ),
+        [],
+      );
+    });
+  });
+
+  describe('listeners', () => {
+    it('rejects tls on a plaintext listener', () => {
+      const finding = expectRule(
+        gatewayWithListener(
+          '    - name: http\n      protocol: HTTP\n      port: 80\n' +
+            '      tls:\n        certificateRefs:\n          - name: web-cert\n',
+        ),
+        'gateway/tls-not-allowed',
+      );
+      expect(finding.path).toEqual(['spec', 'listeners', 0, 'tls']);
+      expect(finding.fix?.title).toBe('Remove tls');
+    });
+
+    it('rejects a passthrough HTTPS listener', () => {
+      const finding = expectRule(
+        gatewayWithListener(
+          '    - name: https\n      protocol: HTTPS\n      port: 443\n' +
+            '      tls:\n        mode: Passthrough\n',
+        ),
+        'gateway/tls-mode',
+      );
+      expect(finding.path).toEqual(['spec', 'listeners', 0, 'tls', 'mode']);
+    });
+
+    it('accepts a passthrough TLS listener', () => {
+      expectRules(
+        gatewayWithListener(
+          '    - name: tls\n      protocol: TLS\n      port: 443\n' +
+            '      tls:\n        mode: Passthrough\n',
+        ),
+        [],
+      );
+    });
+
+    it('requires a certificate when the mode defaults to Terminate', () => {
+      const finding = expectRule(
+        gatewayWithListener(
+          '    - name: https\n      protocol: HTTPS\n      port: 443\n      tls:\n        options: {}\n',
+        ),
+        'gateway/tls-needs-certificate',
+      );
+      expect(finding.message).toContain('certificateRefs');
+    });
+
+    it('accepts a terminating listener naming a certificate', () => {
+      expectRules(
+        gatewayWithListener(
+          '    - name: https\n      protocol: HTTPS\n      port: 443\n' +
+            '      tls:\n        mode: Terminate\n' +
+            '        certificateRefs:\n          - name: web-cert\n',
+        ),
+        [],
+      );
+    });
+
+    it('rejects a hostname on a TCP listener', () => {
+      const finding = expectRule(
+        gatewayWithListener(
+          '    - name: db\n      protocol: TCP\n      port: 5432\n      hostname: db.example.com\n',
+        ),
+        'gateway/hostname-not-allowed',
+      );
+      expect(finding.path).toEqual(['spec', 'listeners', 0, 'hostname']);
+    });
+
+    it('rejects two listeners sharing a port, protocol and hostname', () => {
+      const finding = expectRule(
+        gatewayWithListener(
+          '    - name: web-a\n      protocol: HTTP\n      port: 80\n      hostname: web.example.com\n' +
+            '    - name: web-b\n      protocol: HTTP\n      port: 80\n      hostname: web.example.com\n',
+        ),
+        'gateway/duplicate-listener',
+      );
+      expect(finding.path).toEqual(['spec', 'listeners', 1]);
+    });
+
+    it('accepts two listeners on one port distinguished by hostname', () => {
+      expectRules(
+        gatewayWithListener(
+          '    - name: web-a\n      protocol: HTTP\n      port: 80\n      hostname: a.example.com\n' +
+            '    - name: web-b\n      protocol: HTTP\n      port: 80\n      hostname: b.example.com\n',
+        ),
+        [],
+      );
+    });
+
+    it('leaves two listeners sharing a name to the schema layer', () => {
+      expectRules(
+        gatewayWithListener(
+          '    - name: http\n      protocol: HTTP\n      port: 80\n' +
+            '    - name: http\n      protocol: HTTP\n      port: 8080\n',
+        ),
+        ['schema/duplicate-list-entry'],
+      );
     });
   });
 });
