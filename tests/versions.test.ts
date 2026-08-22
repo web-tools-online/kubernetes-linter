@@ -12,6 +12,7 @@ import {
   VALID_CRONJOB,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
+  VALID_GATEWAY,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -34,6 +35,7 @@ import {
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
+  gatewayWithListener,
   httpRouteWithRule,
   ingressClassParameters,
   ingressPath,
@@ -128,6 +130,7 @@ describe('bundled versions', () => {
         'RoleBinding',
         'ClusterRoleBinding',
         'HTTPRoute',
+        'Gateway',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
       expect(schema.for('StatefulSet')?.apiVersion, version).toBe('apps/v1');
@@ -157,6 +160,7 @@ describe('bundled versions', () => {
         'rbac.authorization.k8s.io/v1',
       );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
+      expect(schema.for('Gateway')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
   });
@@ -543,6 +547,27 @@ describe('bundled versions', () => {
     for (const version of AVAILABLE_VERSIONS) {
       const { findings } = lint(VALID_HTTPROUTE, await schemaFor(version));
       expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('lints a valid Gateway cleanly on every version', async () => {
+    // The second root sourced from a CRD, sharing HTTPRoute's pinned Gateway
+    // API release rather than tracking the k8s one.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_GATEWAY, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a Gateway the same way on every version', async () => {
+    // Like an HTTPRoute, its schema does not vary with the selected
+    // Kubernetes version, so the findings must not either.
+    const yaml = gatewayWithListener(
+      '    - name: https\n      protocol: HTTPS\n      port: 443\n' +
+        '      tls:\n        mode: Passthrough\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['gateway/tls-mode']);
     }
   });
 

@@ -57,11 +57,14 @@
  *   node scripts/generate-schema.mjs 1.37           # one version
  *   node scripts/generate-schema.mjs 1.30 1.31      # a list
  *
- * HTTPRoute is not in that swagger.json at all - Gateway API ships as CRDs
- * from kubernetes-sigs/gateway-api, released independently of Kubernetes
- * itself. Its schema is fetched from one pinned Gateway API release (see
- * GATEWAY_API_VERSION below) and embedded in every k8s bundle unchanged,
- * since installing the CRD does not track the cluster's minor version.
+ * Gateway and HTTPRoute are not in that swagger.json at all - Gateway API
+ * ships as CRDs from kubernetes-sigs/gateway-api, released independently of
+ * Kubernetes itself. Their schemas are fetched from one pinned Gateway API
+ * release (see GATEWAY_API_VERSION below) and embedded in every k8s bundle
+ * unchanged, since installing the CRDs does not track the cluster's minor
+ * version. The two share one pool of definitions, so a type both reach -
+ * a Gateway's listener kinds and an HTTPRoute's parentRefs both name the same
+ * group/kind pair - is extracted once.
  */
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -106,24 +109,26 @@ const OLDEST_MINOR = 25;
 const NEWEST_MINOR = 36;
 
 /**
- * The one Gateway API release HTTPRoute is generated from, standard channel.
- * Bump this by hand to pick up a newer HTTPRoute; unlike the k8s versions
- * above it does not vary per bundle.
+ * The one Gateway API release the Gateway API kinds are generated from,
+ * standard channel. Bump this by hand to pick up a newer Gateway or
+ * HTTPRoute; unlike the k8s versions above it does not vary per bundle.
  */
 const GATEWAY_API_VERSION = 'v1.4.0';
-const GATEWAY_CRD_URL = `https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/${GATEWAY_API_VERSION}/config/crd/standard/gateway.networking.k8s.io_httproutes.yaml`;
+const gatewayCrdUrl = (plural) =>
+  `https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/${GATEWAY_API_VERSION}/config/crd/standard/gateway.networking.k8s.io_${plural}.yaml`;
 const GATEWAY_DEFINITION_PREFIX = 'io.k8s.sigs.gateway-api.apis.v1.';
 
 /**
  * Path inside the HTTPRoute CRD's openAPIV3Schema -> Gateway API Go type
- * name. The CRD inlines every type - it carries no `$ref` of its own - so the
+ * name. A CRD inlines every type - it carries no `$ref` of its own - so the
  * names cannot be recovered from the document itself; this map is what keeps
  * the bundle's definition names, and therefore the `Owner.field` keys
  * `walkFields` produces and the short type name the hover tooltip shows,
  * equal to the API's own type names rather than anonymous inline objects. A
  * path missing from this map makes `flattenGatewayNode` throw, so a Gateway
  * API release that restructures the schema fails generation loudly instead
- * of silently losing a name.
+ * of silently losing a name. Every Gateway API kind carries one of these,
+ * paired with the CRD it flattens in GATEWAY_CRDS below.
  *
  * The same Go type sits at more than one path here - HTTPRouteFilter and its
  * children appear once under `rules[].filters` and again under
@@ -188,34 +193,77 @@ const HTTPROUTE_TYPES = {
  * RouteParentStatus's `conditions` are - field for field - meta/v1's
  * Condition, the same type a ServiceStatus already carries.
  */
-const GATEWAY_SPECIAL_REFS = {
+const HTTPROUTE_SPECIAL_REFS = {
   metadata: 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta',
   'status.parents.[].conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
 };
 
+/** Path inside the Gateway CRD's openAPIV3Schema -> Gateway API Go type name. */
+const GATEWAY_TYPES = {
+  '': 'Gateway',
+  spec: 'GatewaySpec',
+  'spec.addresses.[]': 'GatewaySpecAddress',
+  'spec.infrastructure': 'GatewayInfrastructure',
+  'spec.infrastructure.parametersRef': 'LocalParametersReference',
+  'spec.listeners.[]': 'Listener',
+  'spec.listeners.[].allowedRoutes': 'AllowedRoutes',
+  'spec.listeners.[].allowedRoutes.kinds.[]': 'RouteGroupKind',
+  'spec.listeners.[].allowedRoutes.namespaces': 'RouteNamespaces',
+  'spec.listeners.[].tls': 'ListenerTLSConfig',
+  'spec.listeners.[].tls.certificateRefs.[]': 'SecretObjectReference',
+  status: 'GatewayStatus',
+  'status.addresses.[]': 'GatewayStatusAddress',
+  'status.listeners.[]': 'ListenerStatus',
+  'status.listeners.[].supportedKinds.[]': 'RouteGroupKind',
+};
+
 /**
- * Flatten one node of the CRD's inlined openAPIV3Schema into the same
+ * A Gateway's `status` carries meta/v1 Conditions at two depths, and the
+ * namespace selector under a listener's allowedRoutes is - field for field -
+ * meta/v1's LabelSelector, the same type a Deployment's own selector is.
+ */
+const GATEWAY_SPECIAL_REFS = {
+  metadata: 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta',
+  'spec.listeners.[].allowedRoutes.namespaces.selector':
+    'io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector',
+  'status.conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
+  'status.listeners.[].conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
+};
+
+/**
+ * The Gateway API kinds, each with the CRD it is flattened from. They share
+ * one pool of definitions, so a type both kinds reach is extracted once and
+ * the shape check in `flattenGatewayNode` guards the reuse across kinds as
+ * well as within one.
+ */
+const GATEWAY_CRDS = {
+  HTTPRoute: { plural: 'httproutes', types: HTTPROUTE_TYPES, specialRefs: HTTPROUTE_SPECIAL_REFS },
+  Gateway: { plural: 'gateways', types: GATEWAY_TYPES, specialRefs: GATEWAY_SPECIAL_REFS },
+};
+
+/**
+ * Flatten one node of a CRD's inlined openAPIV3Schema into the same
  * SchemaNode shape the k8s swagger definitions use: named object subtrees
  * become `$ref`s into `defs`, everything else - arrays, scalars with their
  * `enum`/`pattern`/length/bound keywords - is copied inline. `path` is the
- * dotted, `[]`-suffixed address used to look up both maps above.
+ * dotted, `[]`-suffixed address used to look up the two maps `crd` carries.
  *
  * `x-kubernetes-validations` (CEL) is deliberately dropped: layer 1 cannot
  * evaluate CEL, so those checks are reimplemented by hand in
- * `src/lint/rules/httproute.ts` instead. `default` is dropped too - nothing
- * in the linter reads it, and keeping it would imply a promise this project
- * does not make.
+ * `src/lint/rules/httproute.ts` and `src/lint/rules/gateway.ts` instead.
+ * `default` is dropped too - nothing in the linter reads it, and keeping it
+ * would imply a promise this project does not make.
  */
-function flattenGatewayNode(node, path, defs) {
+function flattenGatewayNode(node, path, defs, crd) {
   if (!node || typeof node !== 'object') return node;
 
-  const special = GATEWAY_SPECIAL_REFS[path];
+  const special = crd.specialRefs[path];
   if (special) return { $ref: `#/definitions/${special}` };
 
   if (node.type === 'array') {
     const out = { type: 'array' };
     if (node.description) out.description = node.description;
-    if (node.items) out.items = flattenGatewayNode(node.items, `${path}.[]`, defs);
+    if (node.items) out.items = flattenGatewayNode(node.items, `${path}.[]`, defs, crd);
     if (node.minItems !== undefined) out.minItems = node.minItems;
     if (node.maxItems !== undefined) out.maxItems = node.maxItems;
     if (node['x-kubernetes-list-type']) out['x-kubernetes-list-type'] = node['x-kubernetes-list-type'];
@@ -232,16 +280,27 @@ function flattenGatewayNode(node, path, defs) {
     if (node.properties) {
       body.properties = {};
       for (const [key, child] of Object.entries(node.properties)) {
-        body.properties[key] = flattenGatewayNode(child, path ? `${path}.${key}` : key, defs);
+        body.properties[key] = flattenGatewayNode(child, path ? `${path}.${key}` : key, defs, crd);
       }
     }
     if (node.additionalProperties && typeof node.additionalProperties === 'object') {
-      body.additionalProperties = flattenGatewayNode(node.additionalProperties, `${path}.*`, defs);
+      body.additionalProperties = flattenGatewayNode(
+        node.additionalProperties,
+        `${path}.*`,
+        defs,
+        crd,
+      );
     }
 
-    const typeName = HTTPROUTE_TYPES[path];
+    // A map - additionalProperties and no properties of its own - is a field's
+    // type rather than a named Go struct (a Gateway's infrastructure labels,
+    // a listener's TLS options), so it stays inline the way the k8s swagger
+    // keeps its own string maps, and needs no entry in the type map.
+    if (!node.properties) return body;
+
+    const typeName = crd.types[path];
     if (typeName === undefined) {
-      throw new Error(`generate-schema: no HTTPROUTE_TYPES entry for HTTPRoute path "${path}"`);
+      throw new Error(`generate-schema: no type-map entry for ${crd.kind} path "${path}"`);
     }
 
     const defName = `${GATEWAY_DEFINITION_PREFIX}${typeName}`;
@@ -251,7 +310,7 @@ function flattenGatewayNode(node, path, defs) {
     if (existing) {
       if (withoutDescriptions(existing) !== withoutDescriptions(body)) {
         throw new Error(
-          `generate-schema: HTTPRoute path "${path}" maps to "${typeName}", but an earlier ` +
+          `generate-schema: ${crd.kind} path "${path}" maps to "${typeName}", but an earlier ` +
             'path mapping to the same name has a different shape',
         );
       }
@@ -269,29 +328,36 @@ function flattenGatewayNode(node, path, defs) {
 }
 
 /**
- * Fetch and flatten the HTTPRoute CRD once. It does not vary per k8s minor,
- * so every bundle embeds the same result.
+ * Fetch and flatten every Gateway API CRD once, into one shared pool of
+ * definitions. They do not vary per k8s minor, so every bundle embeds the
+ * same result.
  */
 async function buildGatewayDefinitions() {
-  const res = await fetch(GATEWAY_CRD_URL);
-  if (!res.ok) throw new Error(`fetch failed for the HTTPRoute CRD: ${res.status} ${res.statusText}`);
-  const crd = parseYAML(await res.text());
-  const v1 = crd.spec.versions.find((entry) => entry.name === 'v1');
-  if (!v1) throw new Error('the HTTPRoute CRD does not serve v1');
-
   const definitions = {};
-  flattenGatewayNode(v1.schema.openAPIV3Schema, '', definitions);
+  const roots = {};
 
-  const rootRef = `${GATEWAY_DEFINITION_PREFIX}HTTPRoute`;
-  // Not in the CRD at all - a CRD's schema does not carry a GVK extension,
-  // since the CustomResourceDefinition object beside it already says what
-  // group, version and kind it serves. KindSchema.apiVersion falls back to a
-  // bare "v1" when this is absent, so it has to be synthesised here.
-  definitions[rootRef]['x-kubernetes-group-version-kind'] = [
-    { group: 'gateway.networking.k8s.io', version: 'v1', kind: 'HTTPRoute' },
-  ];
+  for (const [kind, entry] of Object.entries(GATEWAY_CRDS)) {
+    const url = gatewayCrdUrl(entry.plural);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`fetch failed for the ${kind} CRD: ${res.status} ${res.statusText}`);
+    const crd = parseYAML(await res.text());
+    const v1 = crd.spec.versions.find((version) => version.name === 'v1');
+    if (!v1) throw new Error(`the ${kind} CRD does not serve v1`);
 
-  return { rootRef, definitions };
+    flattenGatewayNode(v1.schema.openAPIV3Schema, '', definitions, { ...entry, kind });
+
+    const rootRef = `${GATEWAY_DEFINITION_PREFIX}${kind}`;
+    // Not in the CRD at all - a CRD's schema does not carry a GVK extension,
+    // since the CustomResourceDefinition object beside it already says what
+    // group, version and kind it serves. KindSchema.apiVersion falls back to a
+    // bare "v1" when this is absent, so it has to be synthesised here.
+    definitions[rootRef]['x-kubernetes-group-version-kind'] = [
+      { group: 'gateway.networking.k8s.io', version: 'v1', kind },
+    ];
+    roots[kind] = rootRef;
+  }
+
+  return { roots, definitions };
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -346,7 +412,7 @@ for (const version of versions) {
     source: url,
     generatedAt: new Date().toISOString().slice(0, 10),
     gatewayApiVersion: GATEWAY_API_VERSION,
-    roots: { ...ROOTS, HTTPRoute: gateway.rootRef },
+    roots: { ...ROOTS, ...gateway.roots },
     definitions: Object.fromEntries(combinedNames.map((name) => [name, combinedDefinitions[name]])),
   };
 

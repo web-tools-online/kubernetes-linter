@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding and HTTPRoute',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute and Gateway',
       );
     });
 
@@ -188,8 +188,8 @@ describe('schema conformance', () => {
 
 describe('CRD-sourced schema constraints', () => {
   // The k8s swagger never carries enum/pattern/length/bound keywords (see
-  // rules/enums.ts), so HTTPRoute — generated from a CRD — is the only kind
-  // that exercises this half of layer 1.
+  // rules/enums.ts), so the two Gateway API kinds — generated from CRDs — are
+  // the only ones that exercise this half of layer 1.
 
   it('reports an invalid enum value with a suggestion', () => {
     const yaml = httpRouteWithRule(
@@ -390,6 +390,7 @@ describe('field descriptions', () => {
       'RoleBinding',
       'ClusterRoleBinding',
       'HTTPRoute',
+      'Gateway',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();
   });

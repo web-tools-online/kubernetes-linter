@@ -484,6 +484,37 @@ export function httpRouteWithRule(ruleFragment: string): string {
   return httpRoute(`  rules:\n${ruleFragment}`);
 }
 
+/** A minimal valid Gateway that individual tests mutate. */
+export const VALID_GATEWAY = `apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: web-gateway
+spec:
+  gatewayClassName: example
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+`;
+
+/**
+ * Build a Gateway from a fragment of GatewaySpec. Like `httpRoute()` the
+ * fragment is the whole spec, and `gatewayClassName` is filled in since layer 1
+ * requires it and no check here reads it. Fragments are indented two spaces,
+ * matching `pod()`.
+ */
+export function gateway(specFragment: string, metadataFragment = '  name: web-gateway\n'): string {
+  return (
+    `apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n${metadataFragment}` +
+    `spec:\n  gatewayClassName: example\n${specFragment}`
+  );
+}
+
+/** A Gateway carrying one listener built from the given fragment. */
+export function gatewayWithListener(listenerFragment: string): string {
+  return gateway(`  listeners:\n${listenerFragment}`);
+}
+
 /** A minimal valid PersistentVolume that individual tests mutate. */
 export const VALID_PERSISTENTVOLUME = `apiVersion: v1
 kind: PersistentVolume
