@@ -1,7 +1,7 @@
 {
  "k8sVersion": "1.28",
  "source": "https://raw.githubusercontent.com/kubernetes/kubernetes/release-1.28/api/openapi-spec/swagger.json",
- "generatedAt": "2026-08-22",
+ "generatedAt": "2026-08-23",
  "gatewayApiVersion": "v1.4.0",
  "roots": {
   "Pod": "io.k8s.api.core.v1.Pod",
@@ -27,7 +27,8 @@
   "RoleBinding": "io.k8s.api.rbac.v1.RoleBinding",
   "ClusterRoleBinding": "io.k8s.api.rbac.v1.ClusterRoleBinding",
   "HTTPRoute": "io.k8s.sigs.gateway-api.apis.v1.HTTPRoute",
-  "Gateway": "io.k8s.sigs.gateway-api.apis.v1.Gateway"
+  "Gateway": "io.k8s.sigs.gateway-api.apis.v1.Gateway",
+  "GatewayClass": "io.k8s.sigs.gateway-api.apis.v1.GatewayClass"
  },
  "definitions": {
   "io.k8s.api.apps.v1.DaemonSet": {
@@ -6842,6 +6843,93 @@
     }
    ]
   },
+  "io.k8s.sigs.gateway-api.apis.v1.GatewayClass": {
+   "type": "object",
+   "description": "GatewayClass describes a class of Gateways available to the user for creating\nGateway resources.\n\nIt is recommended that this resource be used as a template for Gateways. This\nmeans that a Gateway is based on the state of the GatewayClass at the time it\nwas created and changes to the GatewayClass or associated parameters are not\npropagated down to existing Gateways. This recommendation is intended to\nlimit the blast radius of changes to GatewayClass or associated parameters.\nIf implementations choose to propagate GatewayClass changes to existing\nGateways, that MUST be clearly documented by the implementation.\n\nWhenever one or more Gateways are using a GatewayClass, implementations SHOULD\nadd the `gateway-exists-finalizer.gateway.networking.k8s.io` finalizer on the\nassociated GatewayClass. This ensures that a GatewayClass associated with a\nGateway is not deleted while in use.\n\nGatewayClass is a Cluster level resource.",
+   "required": [
+    "spec"
+   ],
+   "properties": {
+    "apiVersion": {
+     "type": "string",
+     "description": "APIVersion defines the versioned schema of this representation of an object.\nServers should convert recognized schemas to the latest internal value, and\nmay reject unrecognized values.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources"
+    },
+    "kind": {
+     "type": "string",
+     "description": "Kind is a string value representing the REST resource this object represents.\nServers may infer this from the endpoint the client submits requests to.\nCannot be updated.\nIn CamelCase.\nMore info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds"
+    },
+    "metadata": {
+     "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta"
+    },
+    "spec": {
+     "$ref": "#/definitions/io.k8s.sigs.gateway-api.apis.v1.GatewayClassSpec"
+    },
+    "status": {
+     "$ref": "#/definitions/io.k8s.sigs.gateway-api.apis.v1.GatewayClassStatus"
+    }
+   },
+   "x-kubernetes-group-version-kind": [
+    {
+     "group": "gateway.networking.k8s.io",
+     "version": "v1",
+     "kind": "GatewayClass"
+    }
+   ]
+  },
+  "io.k8s.sigs.gateway-api.apis.v1.GatewayClassSpec": {
+   "type": "object",
+   "description": "Spec defines the desired state of GatewayClass.",
+   "required": [
+    "controllerName"
+   ],
+   "properties": {
+    "controllerName": {
+     "type": "string",
+     "description": "ControllerName is the name of the controller that is managing Gateways of\nthis class. The value of this field MUST be a domain prefixed path.\n\nExample: \"example.net/gateway-controller\".\n\nThis field is not mutable and cannot be empty.\n\nSupport: Core",
+     "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*\\/[A-Za-z0-9\\/\\-._~%!$&'()*+,;=:]+$",
+     "minLength": 1,
+     "maxLength": 253
+    },
+    "description": {
+     "type": "string",
+     "description": "Description helps describe a GatewayClass with more details.",
+     "maxLength": 64
+    },
+    "parametersRef": {
+     "$ref": "#/definitions/io.k8s.sigs.gateway-api.apis.v1.ParametersReference"
+    }
+   }
+  },
+  "io.k8s.sigs.gateway-api.apis.v1.GatewayClassStatus": {
+   "type": "object",
+   "description": "Status defines the current state of GatewayClass.\n\nImplementations MUST populate status on all GatewayClass resources which\nspecify their controller name.",
+   "properties": {
+    "conditions": {
+     "type": "array",
+     "description": "Conditions is the current status from the controller for\nthis GatewayClass.\n\nControllers should prefer to publish conditions using values\nof GatewayClassConditionType for the type of each Condition.",
+     "items": {
+      "$ref": "#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.Condition"
+     },
+     "maxItems": 8,
+     "x-kubernetes-list-type": "map",
+     "x-kubernetes-list-map-keys": [
+      "type"
+     ]
+    },
+    "supportedFeatures": {
+     "type": "array",
+     "description": "SupportedFeatures is the set of features the GatewayClass support.\nIt MUST be sorted in ascending alphabetical order by the Name key.",
+     "items": {
+      "$ref": "#/definitions/io.k8s.sigs.gateway-api.apis.v1.SupportedFeature"
+     },
+     "maxItems": 64,
+     "x-kubernetes-list-type": "map",
+     "x-kubernetes-list-map-keys": [
+      "name"
+     ]
+    }
+   }
+  },
   "io.k8s.sigs.gateway-api.apis.v1.GatewayInfrastructure": {
    "type": "object",
    "description": "Infrastructure defines infrastructure level attributes about this Gateway instance.\n\nSupport: Extended",
@@ -7715,6 +7803,43 @@
     }
    }
   },
+  "io.k8s.sigs.gateway-api.apis.v1.ParametersReference": {
+   "type": "object",
+   "description": "ParametersRef is a reference to a resource that contains the configuration\nparameters corresponding to the GatewayClass. This is optional if the\ncontroller does not require any additional configuration.\n\nParametersRef can reference a standard Kubernetes resource, i.e. ConfigMap,\nor an implementation-specific custom resource. The resource can be\ncluster-scoped or namespace-scoped.\n\nIf the referent cannot be found, refers to an unsupported kind, or when\nthe data within that resource is malformed, the GatewayClass SHOULD be\nrejected with the \"Accepted\" status condition set to \"False\" and an\n\"InvalidParameters\" reason.\n\nA Gateway for this GatewayClass may provide its own `parametersRef`. When both are specified,\nthe merging behavior is implementation specific.\nIt is generally recommended that GatewayClass provides defaults that can be overridden by a Gateway.\n\nSupport: Implementation-specific",
+   "required": [
+    "group",
+    "kind",
+    "name"
+   ],
+   "properties": {
+    "group": {
+     "type": "string",
+     "description": "Group is the group of the referent.",
+     "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+     "maxLength": 253
+    },
+    "kind": {
+     "type": "string",
+     "description": "Kind is kind of the referent.",
+     "pattern": "^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$",
+     "minLength": 1,
+     "maxLength": 63
+    },
+    "name": {
+     "type": "string",
+     "description": "Name is the name of the referent.",
+     "minLength": 1,
+     "maxLength": 253
+    },
+    "namespace": {
+     "type": "string",
+     "description": "Namespace is the namespace of the referent.\nThis field is required when referring to a Namespace-scoped resource and\nMUST be unset when referring to a Cluster-scoped resource.",
+     "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+     "minLength": 1,
+     "maxLength": 63
+    }
+   }
+  },
   "io.k8s.sigs.gateway-api.apis.v1.ParentReference": {
    "type": "object",
    "description": "ParentReference identifies an API object (usually a Gateway) that can be considered\na parent of this resource (usually a route). There are two kinds of parent resources\nwith \"Core\" support:\n\n* Gateway (Gateway conformance profile)\n* Service (Mesh conformance profile, ClusterIP Services only)\n\nThis API may be extended in the future to support additional kinds of parent\nresources.\n\nThe API object must be valid in the cluster; the Group and Kind must\nbe registered in the cluster for this reference to be valid.",
@@ -7870,6 +7995,18 @@
      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
      "minLength": 1,
      "maxLength": 63
+    }
+   }
+  },
+  "io.k8s.sigs.gateway-api.apis.v1.SupportedFeature": {
+   "type": "object",
+   "required": [
+    "name"
+   ],
+   "properties": {
+    "name": {
+     "type": "string",
+     "description": "FeatureName is used to describe distinct features that are covered by\nconformance tests."
     }
    }
   }

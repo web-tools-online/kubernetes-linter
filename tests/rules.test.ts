@@ -7,6 +7,7 @@ import {
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
+  VALID_GATEWAYCLASS,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -44,6 +45,8 @@ import {
   expectRules,
   findings,
   gateway,
+  gatewayClass,
+  gatewayClassWithParameters,
   gatewayWithListener,
   httpRoute,
   httpRouteWithRule,
@@ -6466,6 +6469,96 @@ describe('gateway', () => {
         ),
         ['schema/duplicate-list-entry'],
       );
+    });
+  });
+});
+
+describe('gatewayclass', () => {
+  it('accepts a valid GatewayClass', () => {
+    expectRules(VALID_GATEWAYCLASS, []);
+  });
+
+  it('accepts a parametersRef that resolves', () => {
+    expectRules(
+      gatewayClassWithParameters(
+        '    group: ""\n    kind: ConfigMap\n    name: params\n    namespace: infra\n',
+      ),
+      [],
+    );
+  });
+
+  it('leaves a missing controllerName to the schema layer', () => {
+    expectRules(gatewayClass('', '  name: example\n').replace(
+      '  controllerName: example.net/gateway-controller\n',
+      '',
+    ), ['schema/required-field']);
+  });
+
+  it('rejects a metadata.namespace, the kind being cluster-scoped', () => {
+    expectRule(
+      gatewayClass('', '  name: example\n  namespace: infra\n'),
+      'meta/namespace-not-allowed',
+    );
+  });
+
+  describe('parametersRef', () => {
+    it('reports "core" written as the group', () => {
+      const finding = expectRule(
+        gatewayClassWithParameters('    group: core\n    kind: ConfigMap\n    name: params\n'),
+        'gatewayclass/invalid-parameters-group',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['spec', 'parametersRef', 'group']);
+      expect(finding.fix?.safe).toBe(true);
+    });
+
+    it('reports "v1" written as the group', () => {
+      expectRule(
+        gatewayClassWithParameters('    group: v1\n    kind: ConfigMap\n    name: params\n'),
+        'gatewayclass/invalid-parameters-group',
+      );
+    });
+
+    it('accepts a real group', () => {
+      expectRules(
+        gatewayClassWithParameters(
+          '    group: example.net\n    kind: GatewayParameters\n    name: params\n',
+        ),
+        [],
+      );
+    });
+
+    it('reports a resource name written where a Kind belongs', () => {
+      const finding = expectRule(
+        gatewayClassWithParameters(
+          '    group: ""\n    kind: configmaps\n    name: params\n    namespace: infra\n',
+        ),
+        'gatewayclass/invalid-parameters-kind',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['spec', 'parametersRef', 'kind']);
+    });
+
+    it('reports a namespaced core referent with no namespace', () => {
+      const finding = expectRule(
+        gatewayClassWithParameters('    group: ""\n    kind: Secret\n    name: params\n'),
+        'gatewayclass/missing-parameters-namespace',
+      );
+      expect(finding.severity).toBe('warning');
+      expect(finding.path).toEqual(['spec', 'parametersRef']);
+    });
+
+    it('says nothing about a namespace for a referent whose scope it cannot know', () => {
+      expectNoRule(
+        gatewayClassWithParameters(
+          '    group: example.net\n    kind: GatewayParameters\n    name: params\n',
+        ),
+        'gatewayclass/missing-parameters-namespace',
+      );
+    });
+
+    it('leaves a parametersRef missing its required fields to the schema layer', () => {
+      expectRules(gatewayClassWithParameters('    name: params\n'), ['schema/required-field']);
     });
   });
 });

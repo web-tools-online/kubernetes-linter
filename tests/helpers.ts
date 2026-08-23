@@ -515,6 +515,33 @@ export function gatewayWithListener(listenerFragment: string): string {
   return gateway(`  listeners:\n${listenerFragment}`);
 }
 
+/** A minimal valid GatewayClass that individual tests mutate. */
+export const VALID_GATEWAYCLASS = `apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: example
+spec:
+  controllerName: example.net/gateway-controller
+`;
+
+/**
+ * Build a GatewayClass from a fragment of GatewayClassSpec. `controllerName` is
+ * filled in since layer 1 requires it and no check here reads it, so the
+ * fragment is only ever the parametersRef the module is about. Fragments are
+ * indented two spaces, matching `pod()`.
+ */
+export function gatewayClass(specFragment: string, metadataFragment = '  name: example\n'): string {
+  return (
+    `apiVersion: gateway.networking.k8s.io/v1\nkind: GatewayClass\nmetadata:\n${metadataFragment}` +
+    `spec:\n  controllerName: example.net/gateway-controller\n${specFragment}`
+  );
+}
+
+/** A GatewayClass carrying a parametersRef built from the given fragment. */
+export function gatewayClassWithParameters(parametersFragment: string): string {
+  return gatewayClass(`  parametersRef:\n${parametersFragment}`);
+}
+
 /** A minimal valid PersistentVolume that individual tests mutate. */
 export const VALID_PERSISTENTVOLUME = `apiVersion: v1
 kind: PersistentVolume

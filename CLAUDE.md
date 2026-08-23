@@ -104,7 +104,7 @@ Note that `ctx.supports()` takes an **absolute** path, so a pod-spec gate must b
 `ctx.supports(ctx.at(field))` — passing a bare `['spec', field]` would resolve against the
 wrong node on a Deployment and silently close the gate on every version.
 
-### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, Gateway)
+### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, Gateway, GatewayClass)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
 reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
@@ -124,15 +124,15 @@ scale: RBAC validates a name with `path.IsValidPathSegmentName` and nothing else
 spellable as one segment of a URL is legal there — capitals, `_` and the `:` the built-in roles
 use — and only `.`, `..`, `/` and `%` are refused. `metadata.ts` reads it. `clusterScoped` is the other thing that module
 reads: on a kind that lives outside namespaces (IngressClass, PersistentVolume, ClusterRole,
-ClusterRoleBinding) a
+ClusterRoleBinding, GatewayClass) a
 `metadata.namespace` is not a name to validate but a field the apiserver forbids, so it is
 reported as `meta/namespace-not-allowed` and the format check is skipped.
 
 `podTemplate` is `{ specPath, metadataPath, claimTemplatesPath? }`, and **it is optional**:
 a Service, an Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a
 StorageClass, a NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a
-ServiceAccount, a Role, a ClusterRole, a RoleBinding, a ClusterRoleBinding, an HTTPRoute and
-a Gateway
+ServiceAccount, a Role, a ClusterRole, a RoleBinding, a ClusterRoleBinding, an HTTPRoute, a
+Gateway and a GatewayClass
 describe no Pod at all. Its absence is what makes `POD_RULES`
 skip the kind (`index.ts`), so a kind with no pod template is checked by layer 1, by `RULES` — the
 document-level rules, `metadata.ts` and `enums.ts` — and by its own module, and by nothing
@@ -150,7 +150,8 @@ silently breaks Deployment. The deliberate exceptions are `rules/deployment.ts`,
 `rules/persistentvolume.ts`, `rules/persistentvolumeclaim.ts`, `rules/storageclass.ts`,
 `rules/configmap.ts`, `rules/secret.ts`, `rules/resourcequota.ts`, `rules/limitrange.ts`,
 `rules/serviceaccount.ts`, `rules/role.ts`, `rules/rolebinding.ts`,
-`rules/clusterrolebinding.ts`, `rules/httproute.ts` and `rules/gateway.ts`,
+`rules/clusterrolebinding.ts`, `rules/httproute.ts`, `rules/gateway.ts` and
+`rules/gatewayclass.ts`,
 which address
 `spec.selector`,
 `spec.strategy`, `spec.updateStrategy`,
@@ -172,7 +173,7 @@ and `deployment/*` / `statefulset/*` / `daemonset/*` / `job/*` / `cronjob/*` / `
 `ingress/*` / `ingressclass/*` / `persistentvolume/*` / `persistentvolumeclaim/*` /
 `storageclass/*` / `networkpolicy/*` / `serviceaccount/*` / `configmap/*` / `secret/*` /
 `resourcequota/*` / `limitrange/*` / `role/*` / `clusterrole/*` / `rolebinding/*` /
-`clusterrolebinding/*` / `httproute/*` / `gateway/*` for checks on
+`clusterrolebinding/*` / `httproute/*` / `gateway/*` / `gatewayclass/*` for checks on
 the object itself. The two
 document-level rules
 are named for what they check rather than for a kind, since they run for every kind including
@@ -300,12 +301,13 @@ all — there is no `io.k8s.api.…HTTPRoute` definition to point `ROOTS` at, be
 ships as CRDs from `kubernetes-sigs/gateway-api`, installed independently of the cluster.
 `scripts/generate-schema.mjs` fetches and flattens the HTTPRoute CRD's `openAPIV3Schema` once
 (`buildGatewayDefinitions()`, which does the same for every entry in `GATEWAY_CRDS` — Gateway
-is the other), from one pinned Gateway API release (`GATEWAY_API_VERSION`)
+and GatewayClass are the others), from one pinned Gateway API release (`GATEWAY_API_VERSION`)
 rather than per Kubernetes minor, and embeds the same definitions in every bundle — so
 `ctx.supports()` gates never close for an HTTPRoute field, and the picker's Kubernetes version
 changes nothing about how an HTTPRoute is checked. The CRD schema is already inlined (no
 `$ref` of its own), so `flattenGatewayNode()` re-derives named definitions from a hand-kept
-path-to-Go-type map per CRD (`HTTPROUTE_TYPES`, `GATEWAY_TYPES`), checking that any two paths
+path-to-Go-type map per CRD (`HTTPROUTE_TYPES`, `GATEWAY_TYPES`, `GATEWAYCLASS_TYPES`),
+checking that any two paths
 mapping to the same name produce the same shape before reusing it — `ParentReference` is one such case, reached both
 from `spec.parentRefs` and from `status.parents[].parentRef`. Two subtrees are replaced
 wholesale by definitions the bundle already carries rather than flattened on their own:
@@ -316,7 +318,7 @@ status conditions — becomes a `$ref` to meta/v1 `Condition`.
 `gateway.ts` is the eighteenth, and the second Gateway API kind — so everything the HTTPRoute
 paragraph above says about where its schema comes from holds here unchanged, down to sharing
 one pool of definitions with it (`RouteGroupKind` is reached twice within Gateway itself, and
-the shape check guards reuse across the two CRDs as well as within one). Three things are its
+the shape check guards reuse across the three CRDs as well as within one). Three things are its
 own. A map — a listener's `tls.options`, the `infrastructure` labels and annotations — is a
 field's type rather than a named Go struct, so `flattenGatewayNode()` leaves it inline instead
 of demanding a `GATEWAY_TYPES` entry for it; `GATEWAY_SPECIAL_REFS` swaps `status`'s two
@@ -334,6 +336,30 @@ so an absent `tls.mode` is checked as the `Terminate` it defaults to rather than
 is what makes a `tls: {}` on an HTTPS listener an error. Deliberately skipped: `status`, which
 the implementation writes rather than the manifest, and `allowedRoutes`, whose `from: Selector`
 without a `selector` beside it the apiserver accepts.
+
+`gatewayclass.ts` is the nineteenth, the third Gateway API kind and the smallest module of the
+three — for the opposite reason to `clusterrolebinding.ts`, which is small because another
+module does its work: here there is barely any work to do. A GatewayClass's CRD states every
+check the apiserver makes in its own schema (`controllerName` required, length-capped and
+pattern-matched as a domain-prefixed path, `description` length-capped, a `parametersRef`
+requiring `group`, `kind` and `name`, each with its own pattern), and its one CEL rule only
+makes `controllerName` immutable — an update constraint, skipped here as a StorageClass's
+`provisioner` immutability is. So layer 1 covers the whole of what can be rejected, and this
+module joins `serviceaccount.ts` as the second with **no error-severity finding at all**: what
+is left is the ways a `parametersRef` the apiserver stores verbatim then resolves to nothing.
+A `group` written `core` or `v1` names no group the referent could be served under, the core
+group being named by the empty string the pattern admits explicitly — the inverse of an
+IngressClass's `apiGroup`, which is *omitted* to mean core, which is why `ingressclass.ts`
+reports the empty string there and this module fixes to it here. A `kind` written as the
+lowercase plural resource name passes a pattern that only asks for a leading letter and then
+matches nothing, the RESTMapper lookup being case-sensitive. And a `parametersRef` with no
+`namespace` can only resolve to a cluster-scoped referent, a GatewayClass having no namespace
+of its own to lend — reportable only where the referent's scope is knowable, which is the core
+group's own kinds and nothing else, since no manifest carries the scope of a resource it names.
+`GATEWAYCLASS_TYPES` names one type the other two CRDs do not reach, `ParametersReference`:
+it is not the `LocalParametersReference` a Gateway's `infrastructure` carries, which has no
+`namespace` field precisely because a Gateway has a namespace of its own. Deliberately skipped,
+as on the other two: `status`, which the implementation writes rather than the manifest.
 
 `storageclass.ts` is the seventh, and the structural odd one out: a StorageClass has **no
 `spec`**. `provisioner`, `parameters`, `reclaimPolicy`, `mountOptions`, `allowVolumeExpansion`,
@@ -660,14 +686,14 @@ strings, the ignored namespaces, the duplicates, the empty subject list — arri
 `role/*` ones. Deliberately skipped, as on a RoleBinding: whether the referenced ClusterRole or
 a named ServiceAccount exists, and the immutability of `roleRef`.
 
-Unlike every other kind, the two Gateway API kinds' schemas carry `enum`, `pattern`,
+Unlike every other kind, the three Gateway API kinds' schemas carry `enum`, `pattern`,
 `minLength`/`maxLength` and `minItems`/`maxItems` directly — a CRD's OpenAPI schema is generated from Go kubebuilder
 markers, unlike the hand-written Kubernetes API types the other twenty-two kinds come from, where
 `rules/enums.ts`'s doc comment already explains why the *k8s* schema never carries `enum`.
 Rather than hand-write checks layer 1 can already derive from those keywords, `schema.ts`
 gained generic support for all five (`schema/enum`, `schema/pattern`, `schema/string-length`,
 `schema/out-of-range`, `schema/list-size`), purely additively — no k8s bundle definition sets
-any of them, so the other twenty-two kinds are unaffected. That leaves `httproute.ts` — and `gateway.ts` beside it — with
+any of them, so the other twenty-two kinds are unaffected. That leaves `httproute.ts` — and `gateway.ts` and `gatewayclass.ts` beside it — with
 only what the CRD's schema cannot express at all: its `x-kubernetes-validations` (CEL) rules, which
 `generate-schema.mjs` strips during flattening since layer 1 cannot evaluate CEL, and which are
 reimplemented by hand instead — filter `type` agreeing with its populated field, `parentRefs`
@@ -709,8 +735,8 @@ The reusable machinery — the schema walk, `walkFields`,
 ### Schema bundles
 
 `scripts/generate-schema.mjs` unions the transitive `$ref` closure of every root in `ROOTS`
-(246 defs at 1.36 from the k8s swagger, plus ~36 more flattened from the HTTPRoute and Gateway
-CRDs — see above — for 282 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
+(246 defs at 1.36 from the k8s swagger, plus ~41 more flattened from the HTTPRoute, Gateway and
+GatewayClass CRDs — see above — for 287 total, ~55 KB brotli with descriptions intact) and writes `{ k8sVersion, source,
 generatedAt, gatewayApiVersion, roots, definitions }`. `gatewayApiVersion` is the one field on
 that record the Gateway API kinds own and nothing else does, recording the pinned Gateway API
 release their definitions came from — a second provenance, since `k8sVersion`/`source` describe only the k8s
@@ -781,7 +807,7 @@ them property-by-property would produce nonsense.
   `serviceaccount/<thing>` /
   `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
   `role/<thing>` / `clusterrole/<thing>` / `rolebinding/<thing>` / `httproute/<thing>` /
-  `gateway/<thing>` for
+  `gateway/<thing>` / `gatewayclass/<thing>` for
   checks on the object itself; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.

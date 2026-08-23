@@ -57,14 +57,14 @@
  *   node scripts/generate-schema.mjs 1.37           # one version
  *   node scripts/generate-schema.mjs 1.30 1.31      # a list
  *
- * Gateway and HTTPRoute are not in that swagger.json at all - Gateway API
- * ships as CRDs from kubernetes-sigs/gateway-api, released independently of
- * Kubernetes itself. Their schemas are fetched from one pinned Gateway API
- * release (see GATEWAY_API_VERSION below) and embedded in every k8s bundle
- * unchanged, since installing the CRDs does not track the cluster's minor
- * version. The two share one pool of definitions, so a type both reach -
- * a Gateway's listener kinds and an HTTPRoute's parentRefs both name the same
- * group/kind pair - is extracted once.
+ * HTTPRoute, Gateway and GatewayClass are not in that swagger.json at all -
+ * Gateway API ships as CRDs from kubernetes-sigs/gateway-api, released
+ * independently of Kubernetes itself. Their schemas are fetched from one
+ * pinned Gateway API release (see GATEWAY_API_VERSION below) and embedded in
+ * every k8s bundle unchanged, since installing the CRDs does not track the
+ * cluster's minor version. The three share one pool of definitions, so a type
+ * more than one reaches - a Gateway's listener kinds and an HTTPRoute's
+ * parentRefs both name the same group/kind pair - is extracted once.
  */
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -110,8 +110,9 @@ const NEWEST_MINOR = 36;
 
 /**
  * The one Gateway API release the Gateway API kinds are generated from,
- * standard channel. Bump this by hand to pick up a newer Gateway or
- * HTTPRoute; unlike the k8s versions above it does not vary per bundle.
+ * standard channel. Bump this by hand to pick up a newer
+ * HTTPRoute, Gateway or GatewayClass; unlike the k8s versions above it does
+ * not vary per bundle.
  */
 const GATEWAY_API_VERSION = 'v1.4.0';
 const gatewayCrdUrl = (plural) =>
@@ -231,14 +232,39 @@ const GATEWAY_SPECIAL_REFS = {
 };
 
 /**
+ * Path inside the GatewayClass CRD's openAPIV3Schema -> Gateway API Go type
+ * name. `parametersRef` is a ParametersReference rather than the
+ * LocalParametersReference a Gateway's infrastructure carries: a GatewayClass
+ * is cluster-scoped, so its reference has to name a namespace of its own.
+ */
+const GATEWAYCLASS_TYPES = {
+  '': 'GatewayClass',
+  spec: 'GatewayClassSpec',
+  'spec.parametersRef': 'ParametersReference',
+  status: 'GatewayClassStatus',
+  'status.supportedFeatures.[]': 'SupportedFeature',
+};
+
+/** A GatewayClass's `status` carries meta/v1 Conditions, as a Gateway's does. */
+const GATEWAYCLASS_SPECIAL_REFS = {
+  metadata: 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta',
+  'status.conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
+};
+
+/**
  * The Gateway API kinds, each with the CRD it is flattened from. They share
- * one pool of definitions, so a type both kinds reach is extracted once and
- * the shape check in `flattenGatewayNode` guards the reuse across kinds as
- * well as within one.
+ * one pool of definitions, so a type more than one of them reaches is
+ * extracted once and the shape check in `flattenGatewayNode` guards the reuse
+ * across kinds as well as within one.
  */
 const GATEWAY_CRDS = {
   HTTPRoute: { plural: 'httproutes', types: HTTPROUTE_TYPES, specialRefs: HTTPROUTE_SPECIAL_REFS },
   Gateway: { plural: 'gateways', types: GATEWAY_TYPES, specialRefs: GATEWAY_SPECIAL_REFS },
+  GatewayClass: {
+    plural: 'gatewayclasses',
+    types: GATEWAYCLASS_TYPES,
+    specialRefs: GATEWAYCLASS_SPECIAL_REFS,
+  },
 };
 
 /**

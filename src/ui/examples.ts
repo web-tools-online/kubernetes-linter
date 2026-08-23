@@ -955,4 +955,28 @@ spec:
           - name: web-cert
 `,
   },
+  {
+    id: 'gatewayclass',
+    label: 'A GatewayClass with problems',
+    blurb:
+      'A parameters reference the apiserver stores exactly as written and the controller then cannot resolve: a group that is not one, and a plural resource name where a Kind belongs.',
+    yaml: `apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: example
+spec:
+  controllerName: example.net/gateway-controller
+  parametersRef:
+    # The core group is named by an empty string; "core" is what it is called
+    # in prose, and no apiserver serves a group by that name.
+    group: core
+    # A Kind, not the plural resource name a kubectl command takes — the
+    # lookup is case-sensitive, so this matches nothing.
+    kind: configmaps
+    name: example-parameters
+    # A GatewayClass lives outside every namespace, so a reference to a
+    # namespaced object has to carry one of its own. This part is right.
+    namespace: infra
+`,
+  },
 ];
