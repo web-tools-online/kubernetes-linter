@@ -13,6 +13,7 @@ import {
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
+  VALID_GATEWAYCLASS,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -35,6 +36,7 @@ import {
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
+  gatewayClassWithParameters,
   gatewayWithListener,
   httpRouteWithRule,
   ingressClassParameters,
@@ -131,6 +133,7 @@ describe('bundled versions', () => {
         'ClusterRoleBinding',
         'HTTPRoute',
         'Gateway',
+        'GatewayClass',
       ]);
       expect(schema.for('Deployment')?.apiVersion, version).toBe('apps/v1');
       expect(schema.for('StatefulSet')?.apiVersion, version).toBe('apps/v1');
@@ -161,6 +164,9 @@ describe('bundled versions', () => {
       );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('Gateway')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
+      expect(schema.for('GatewayClass')?.apiVersion, version).toBe(
+        'gateway.networking.k8s.io/v1',
+      );
       expect(schema.for('StorageClass')?.apiVersion, version).toBe('storage.k8s.io/v1');
     }
   });
@@ -568,6 +574,26 @@ describe('bundled versions', () => {
     );
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['gateway/tls-mode']);
+    }
+  });
+
+  it('lints a valid GatewayClass cleanly on every version', async () => {
+    // The third root sourced from a CRD, sharing the same pinned Gateway API
+    // release as the other two.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_GATEWAYCLASS, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
+  it('checks a GatewayClass the same way on every version', async () => {
+    // Its schema does not vary with the selected Kubernetes version either, so
+    // neither may the findings.
+    const yaml = gatewayClassWithParameters('    group: core\n    kind: ConfigMap\n    name: params\n');
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual([
+        'gatewayclass/invalid-parameters-group',
+      ]);
     }
   });
 

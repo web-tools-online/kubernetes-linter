@@ -7,6 +7,7 @@ import { cronJobRule } from './rules/cronjob.js';
 import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
 import { gatewayRule } from './rules/gateway.js';
+import { gatewayClassRule } from './rules/gatewayclass.js';
 import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
@@ -138,6 +139,11 @@ export const KINDS: Record<string, KindDescriptor> = {
   Gateway: {
     kind: 'Gateway',
     rules: [gatewayRule],
+  },
+  GatewayClass: {
+    kind: 'GatewayClass',
+    clusterScoped: true,
+    rules: [gatewayClassRule],
   },
   IngressClass: {
     kind: 'IngressClass',

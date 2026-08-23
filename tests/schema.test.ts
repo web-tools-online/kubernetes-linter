@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute and Gateway',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, Gateway and GatewayClass',
       );
     });
 
@@ -391,6 +391,7 @@ describe('field descriptions', () => {
       'ClusterRoleBinding',
       'HTTPRoute',
       'Gateway',
+      'GatewayClass',
     ]);
     expect(schema.for('ReplicaSet')).toBeUndefined();
   });
