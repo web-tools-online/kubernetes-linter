@@ -8,6 +8,7 @@ import {
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
   VALID_GATEWAYCLASS,
+  VALID_GRPCROUTE,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -48,6 +49,8 @@ import {
   gatewayClass,
   gatewayClassWithParameters,
   gatewayWithListener,
+  grpcRoute,
+  grpcRouteWithRule,
   httpRoute,
   httpRouteWithRule,
   ingress,
@@ -3905,6 +3908,161 @@ describe('httproute', () => {
           '      backendRefs:\n        - name: web\n          port: 80\n',
       );
       expectNoRule(yaml, 'httproute/path-value');
+    });
+  });
+});
+
+describe('grpcroute', () => {
+  it('accepts a valid GRPCRoute', () => {
+    expectRules(VALID_GRPCROUTE, []);
+  });
+
+  describe('parentRefs', () => {
+    it('requires sectionName when two refs point at the same parent', () => {
+      const yaml = grpcRoute(
+        '  parentRefs:\n    - name: shared-gateway\n    - name: shared-gateway\n' +
+          '  rules:\n    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      const finding = expectRule(yaml, 'grpcroute/parent-ref-needs-section-name');
+      expect(finding.message).toContain('sectionName');
+    });
+
+    it('rejects two refs to the same parent naming the same sectionName', () => {
+      const yaml = grpcRoute(
+        '  parentRefs:\n    - name: shared-gateway\n      sectionName: grpc\n' +
+          '    - name: shared-gateway\n      sectionName: grpc\n' +
+          '  rules:\n    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/duplicate-parent-ref-section');
+    });
+
+    it('does not flag two refs to different parents', () => {
+      const yaml = grpcRoute(
+        '  parentRefs:\n    - name: gateway-a\n    - name: gateway-b\n' +
+          '  rules:\n    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRules(yaml, []);
+    });
+  });
+
+  it('rejects more than 128 matches across all rules', () => {
+    const oneRuleWith = (n: number) => {
+      const matches = Array.from(
+        { length: n },
+        (_, i) => `        - method:\n            type: Exact\n            method: M${i}\n`,
+      ).join('');
+      return `    - matches:\n${matches}      backendRefs:\n        - name: payments-api\n          port: 50051\n`;
+    };
+    const yaml = grpcRouteWithRule(oneRuleWith(50) + oneRuleWith(50) + oneRuleWith(50));
+    const finding = expectRule(yaml, 'grpcroute/too-many-matches');
+    expect(finding.message).toContain('150');
+  });
+
+  describe('matches', () => {
+    it('requires at least one of service or method', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/match-needs-service-or-method');
+    });
+
+    it('rejects a service name with invalid characters', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            service: "not a service!"\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/match-service-format');
+    });
+
+    it('rejects a method name starting with a digit', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: 3Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/match-method-format');
+    });
+
+    it('does not apply the format checks to a RegularExpression match', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: RegularExpression\n            method: "^Charge.*"\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRules(yaml, []);
+    });
+  });
+
+  describe('backend references', () => {
+    it('requires a port on a Service backendRef', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n',
+      );
+      expectRule(yaml, 'grpcroute/backend-port-required');
+    });
+
+    it('does not require a port on a non-Service backendRef', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      backendRefs:\n        - name: payments-api\n          group: example.com\n          kind: Function\n',
+      );
+      expectNoRule(yaml, 'grpcroute/backend-port-required');
+    });
+
+    it('requires a port on a requestMirror Service backendRef too', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n            backendRef:\n              name: shadow\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/backend-port-required');
+    });
+  });
+
+  describe('filters', () => {
+    it('rejects the same filter type twice in one list', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      filters:\n        - type: RequestHeaderModifier\n          requestHeaderModifier:\n' +
+          '            add:\n              - name: X-A\n                value: "1"\n' +
+          '        - type: RequestHeaderModifier\n          requestHeaderModifier:\n' +
+          '            add:\n              - name: X-B\n                value: "2"\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      expectRule(yaml, 'grpcroute/duplicate-filter');
+    });
+
+    it('requires the field matching the declared filter type, both directions', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      filters:\n        - type: RequestHeaderModifier\n          responseHeaderModifier:\n            add:\n              - name: X-A\n                value: "1"\n' +
+          '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+      );
+      const mismatches = ruleIds(yaml).filter((id) => id === 'grpcroute/filter-type-mismatch');
+      expect(mismatches.length).toBe(2);
+    });
+
+    it('rejects requestMirror setting both percent and fraction', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n' +
+          '            backendRef:\n              name: shadow\n              port: 50051\n' +
+          '            percent: 10\n            fraction:\n              numerator: 1\n              denominator: 10\n',
+      );
+      expectRule(yaml, 'grpcroute/mirror-percent-and-fraction');
+    });
+
+    it('rejects a fraction numerator above its denominator', () => {
+      const yaml = grpcRouteWithRule(
+        '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+          '      filters:\n        - type: RequestMirror\n          requestMirror:\n' +
+          '            backendRef:\n              name: shadow\n              port: 50051\n' +
+          '            fraction:\n              numerator: 11\n              denominator: 10\n',
+      );
+      expectRule(yaml, 'grpcroute/fraction-numerator-exceeds-denominator');
     });
   });
 });

@@ -199,6 +199,58 @@ const HTTPROUTE_SPECIAL_REFS = {
   'status.parents.[].conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
 };
 
+/**
+ * Path inside the GRPCRoute CRD's openAPIV3Schema -> Gateway API Go type
+ * name. GRPCRoute reuses several of HTTPRoute's own types verbatim
+ * (ParentReference, HTTPHeaderFilter, HTTPRequestMirrorFilter,
+ * BackendObjectReference, Fraction, LocalObjectReference, RouteParentStatus) -
+ * the CRD's own generated messages even still say "HTTPRequestMirrorFilter"
+ * for a GRPCRoute's requestMirror filter - so GRPCRoute is listed after
+ * HTTPRoute in GATEWAY_CRDS below and the shape check in flattenGatewayNode
+ * confirms the reuse rather than silently diverging.
+ */
+const GRPCROUTE_TYPES = {
+  '': 'GRPCRoute',
+  spec: 'GRPCRouteSpec',
+  'spec.parentRefs.[]': 'ParentReference',
+  'spec.rules.[]': 'GRPCRouteRule',
+  'spec.rules.[].matches.[]': 'GRPCRouteMatch',
+  'spec.rules.[].matches.[].method': 'GRPCMethodMatch',
+  'spec.rules.[].matches.[].headers.[]': 'GRPCHeaderMatch',
+  'spec.rules.[].backendRefs.[]': 'GRPCBackendRef',
+  'spec.rules.[].filters.[]': 'GRPCRouteFilter',
+  'spec.rules.[].filters.[].requestHeaderModifier': 'HTTPHeaderFilter',
+  'spec.rules.[].filters.[].requestHeaderModifier.add.[]': 'HTTPHeader',
+  'spec.rules.[].filters.[].requestHeaderModifier.set.[]': 'HTTPHeader',
+  'spec.rules.[].filters.[].responseHeaderModifier': 'HTTPHeaderFilter',
+  'spec.rules.[].filters.[].responseHeaderModifier.add.[]': 'HTTPHeader',
+  'spec.rules.[].filters.[].responseHeaderModifier.set.[]': 'HTTPHeader',
+  'spec.rules.[].filters.[].requestMirror': 'HTTPRequestMirrorFilter',
+  'spec.rules.[].filters.[].requestMirror.backendRef': 'BackendObjectReference',
+  'spec.rules.[].filters.[].requestMirror.fraction': 'Fraction',
+  'spec.rules.[].filters.[].extensionRef': 'LocalObjectReference',
+  'spec.rules.[].backendRefs.[].filters.[]': 'GRPCRouteFilter',
+  'spec.rules.[].backendRefs.[].filters.[].requestHeaderModifier': 'HTTPHeaderFilter',
+  'spec.rules.[].backendRefs.[].filters.[].requestHeaderModifier.add.[]': 'HTTPHeader',
+  'spec.rules.[].backendRefs.[].filters.[].requestHeaderModifier.set.[]': 'HTTPHeader',
+  'spec.rules.[].backendRefs.[].filters.[].responseHeaderModifier': 'HTTPHeaderFilter',
+  'spec.rules.[].backendRefs.[].filters.[].responseHeaderModifier.add.[]': 'HTTPHeader',
+  'spec.rules.[].backendRefs.[].filters.[].responseHeaderModifier.set.[]': 'HTTPHeader',
+  'spec.rules.[].backendRefs.[].filters.[].requestMirror': 'HTTPRequestMirrorFilter',
+  'spec.rules.[].backendRefs.[].filters.[].requestMirror.backendRef': 'BackendObjectReference',
+  'spec.rules.[].backendRefs.[].filters.[].requestMirror.fraction': 'Fraction',
+  'spec.rules.[].backendRefs.[].filters.[].extensionRef': 'LocalObjectReference',
+  status: 'GRPCRouteStatus',
+  'status.parents.[]': 'RouteParentStatus',
+  'status.parents.[].parentRef': 'ParentReference',
+};
+
+/** Same substitutions HTTPRoute makes for its own metadata and status conditions. */
+const GRPCROUTE_SPECIAL_REFS = {
+  metadata: 'io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta',
+  'status.parents.[].conditions.[]': 'io.k8s.apimachinery.pkg.apis.meta.v1.Condition',
+};
+
 /** Path inside the Gateway CRD's openAPIV3Schema -> Gateway API Go type name. */
 const GATEWAY_TYPES = {
   '': 'Gateway',
@@ -259,6 +311,7 @@ const GATEWAYCLASS_SPECIAL_REFS = {
  */
 const GATEWAY_CRDS = {
   HTTPRoute: { plural: 'httproutes', types: HTTPROUTE_TYPES, specialRefs: HTTPROUTE_SPECIAL_REFS },
+  GRPCRoute: { plural: 'grpcroutes', types: GRPCROUTE_TYPES, specialRefs: GRPCROUTE_SPECIAL_REFS },
   Gateway: { plural: 'gateways', types: GATEWAY_TYPES, specialRefs: GATEWAY_SPECIAL_REFS },
   GatewayClass: {
     plural: 'gatewayclasses',

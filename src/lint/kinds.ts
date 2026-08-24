@@ -8,6 +8,7 @@ import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
 import { gatewayRule } from './rules/gateway.js';
 import { gatewayClassRule } from './rules/gatewayclass.js';
+import { grpcRouteRule } from './rules/grpcroute.js';
 import { httpRouteRule } from './rules/httproute.js';
 import { ingressRule } from './rules/ingress.js';
 import { ingressClassRule } from './rules/ingressclass.js';
@@ -135,6 +136,10 @@ export const KINDS: Record<string, KindDescriptor> = {
   HTTPRoute: {
     kind: 'HTTPRoute',
     rules: [httpRouteRule],
+  },
+  GRPCRoute: {
+    kind: 'GRPCRoute',
+    rules: [grpcRouteRule],
   },
   Gateway: {
     kind: 'Gateway',

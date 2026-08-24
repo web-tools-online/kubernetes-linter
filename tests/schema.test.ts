@@ -125,7 +125,7 @@ describe('schema conformance', () => {
       expect(result.map((finding) => finding.ruleId)).toEqual(['lint/unsupported-kind']);
       expect(result[0]?.severity).toBe('info');
       expect(result[0]?.message).toContain(
-        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, Gateway and GatewayClass',
+        'Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, GRPCRoute, Gateway and GatewayClass',
       );
     });
 
@@ -347,6 +347,12 @@ describe('field descriptions', () => {
     expect(httpRoute.describe(['spec', 'containers'])).toBeUndefined();
   });
 
+  it('resolves a GRPCRoute field, sharing HTTPRoute\'s pinned Gateway API release', () => {
+    const grpcRoute = schema.for('GRPCRoute')!;
+    expect(grpcRoute.describe(['spec', 'rules', 0, 'matches', 0, 'method', 'type'])?.type).toBe('string');
+    expect(grpcRoute.describe(['spec', 'containers'])).toBeUndefined();
+  });
+
   it('resolves a CronJob field nested under its JobTemplateSpec', () => {
     const cronJob = schema.for('CronJob')!;
     expect(
@@ -390,6 +396,7 @@ describe('field descriptions', () => {
       'RoleBinding',
       'ClusterRoleBinding',
       'HTTPRoute',
+      'GRPCRoute',
       'Gateway',
       'GatewayClass',
     ]);

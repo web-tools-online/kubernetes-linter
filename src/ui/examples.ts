@@ -979,4 +979,50 @@ spec:
     namespace: infra
 `,
   },
+  {
+    id: 'grpcroute',
+    label: 'A GRPCRoute with problems',
+    blurb:
+      'A method name that starts with a digit, a Service backend with no port, a requestMirror setting both percent and fraction, and a match naming neither service nor method.',
+    yaml: `apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: payments
+spec:
+  parentRefs:
+    - name: web-gateway
+  hostnames:
+    - payments.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: payments.v1.PaymentService
+            # A gRPC method name may not start with a digit.
+            method: 3Charge
+      backendRefs:
+        # group and kind default to a reference to a Service, which can
+        # expose more than one port — this backend does not say which.
+        - name: payments-api
+      filters:
+        - type: RequestMirror
+          requestMirror:
+            backendRef:
+              name: payments-shadow
+              port: 50051
+            # Only one of percent or fraction may be specified.
+            percent: 10
+            fraction:
+              numerator: 1
+              denominator: 10
+    - matches:
+        - method:
+            # Neither service nor method is set, so this matches every
+            # request — spell that by omitting "method" entirely instead.
+            type: Exact
+      backendRefs:
+        - name: payments-api
+          port: 50051
+`,
+  },
 ];

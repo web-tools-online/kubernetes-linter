@@ -484,6 +484,41 @@ export function httpRouteWithRule(ruleFragment: string): string {
   return httpRoute(`  rules:\n${ruleFragment}`);
 }
 
+/** A minimal valid GRPCRoute that individual tests mutate. */
+export const VALID_GRPCROUTE = `apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: payments
+spec:
+  parentRefs:
+    - name: web-gateway
+  hostnames:
+    - payments.example.com
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: payments.v1.PaymentService
+            method: Charge
+      backendRefs:
+        - name: payments-api
+          port: 50051
+`;
+
+/**
+ * Build a GRPCRoute from a fragment of GRPCRouteSpec. Like `httpRoute()` the
+ * fragment is the whole spec: a GRPCRoute has no pod template either.
+ * Fragments are indented two spaces, matching `pod()`.
+ */
+export function grpcRoute(specFragment: string, metadataFragment = '  name: payments\n'): string {
+  return `apiVersion: gateway.networking.k8s.io/v1\nkind: GRPCRoute\nmetadata:\n${metadataFragment}spec:\n${specFragment}`;
+}
+
+/** A GRPCRoute carrying one rule built from the given fragment. */
+export function grpcRouteWithRule(ruleFragment: string): string {
+  return grpcRoute(`  rules:\n${ruleFragment}`);
+}
+
 /** A minimal valid Gateway that individual tests mutate. */
 export const VALID_GATEWAY = `apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway

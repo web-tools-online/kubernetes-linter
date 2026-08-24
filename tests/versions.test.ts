@@ -14,6 +14,7 @@ import {
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
   VALID_GATEWAYCLASS,
+  VALID_GRPCROUTE,
   VALID_HTTPROUTE,
   VALID_INGRESS,
   VALID_INGRESS_CLASS,
@@ -38,6 +39,7 @@ import {
   deploymentWithPodSpec,
   gatewayClassWithParameters,
   gatewayWithListener,
+  grpcRouteWithRule,
   httpRouteWithRule,
   ingressClassParameters,
   ingressPath,
@@ -132,6 +134,7 @@ describe('bundled versions', () => {
         'RoleBinding',
         'ClusterRoleBinding',
         'HTTPRoute',
+        'GRPCRoute',
         'Gateway',
         'GatewayClass',
       ]);
@@ -163,6 +166,7 @@ describe('bundled versions', () => {
         'rbac.authorization.k8s.io/v1',
       );
       expect(schema.for('HTTPRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
+      expect(schema.for('GRPCRoute')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('Gateway')?.apiVersion, version).toBe('gateway.networking.k8s.io/v1');
       expect(schema.for('GatewayClass')?.apiVersion, version).toBe(
         'gateway.networking.k8s.io/v1',
@@ -556,6 +560,15 @@ describe('bundled versions', () => {
     }
   });
 
+  it('lints a valid GRPCRoute cleanly on every version', async () => {
+    // Sourced from a CRD sharing HTTPRoute's pinned Gateway API release, so
+    // like HTTPRoute this is the tripwire for that half of generation.
+    for (const version of AVAILABLE_VERSIONS) {
+      const { findings } = lint(VALID_GRPCROUTE, await schemaFor(version));
+      expect(findings, `${version}: ${findings.map((f) => f.message).join('; ')}`).toEqual([]);
+    }
+  });
+
   it('lints a valid Gateway cleanly on every version', async () => {
     // The second root sourced from a CRD, sharing HTTPRoute's pinned Gateway
     // API release rather than tracking the k8s one.
@@ -607,6 +620,19 @@ describe('bundled versions', () => {
     );
     for (const version of AVAILABLE_VERSIONS) {
       expect(await ruleIdsAt(version, yaml), version).toEqual(['httproute/redirect-with-backend-refs']);
+    }
+  });
+
+  it('checks a GRPCRoute the same way on every version', async () => {
+    // Its schema does not vary with the selected Kubernetes version either,
+    // so the same manifest has to produce the same findings across the range.
+    const yaml = grpcRouteWithRule(
+      '    - matches:\n        - method:\n            type: Exact\n            method: Charge\n' +
+        '      filters:\n        - type: RequestMirror\n          requestMirror:\n            backendRef:\n              name: shadow\n' +
+        '      backendRefs:\n        - name: payments-api\n          port: 50051\n',
+    );
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, yaml), version).toEqual(['grpcroute/backend-port-required']);
     }
   });
 
