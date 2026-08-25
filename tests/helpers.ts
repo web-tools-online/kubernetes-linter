@@ -965,3 +965,28 @@ export function clusterBindingSubjects(subjectsFragment: string): string {
 export function clusterBindingSubject(fieldsFragment: string): string {
   return clusterBindingSubjects(fieldsFragment.replace(/^ {4}/, '  - '));
 }
+
+/**
+ * A minimal valid custom resource: a kind no bundle carries a root for, served
+ * by a CustomResourceDefinition somebody installed. Only its apiVersion, kind
+ * and metadata are checkable, so the body below them is deliberately arbitrary.
+ */
+export const VALID_CUSTOM_RESOURCE = `apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: main
+  namespace: monitoring
+spec:
+  replicas: 2
+  serviceMonitorSelector:
+    matchLabels:
+      team: frontend
+`;
+
+/** A custom resource with the given apiVersion and metadata fragment. */
+export function customResource(
+  apiVersion = 'monitoring.coreos.com/v1',
+  metadataFragment = '  name: main\n',
+): string {
+  return `apiVersion: ${apiVersion}\nkind: Prometheus\nmetadata:\n${metadataFragment}spec:\n  replicas: 2\n`;
+}

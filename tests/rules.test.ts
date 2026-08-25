@@ -4,6 +4,7 @@ import {
   VALID_CLUSTER_ROLE_BINDING,
   VALID_CONFIGMAP,
   VALID_CRONJOB,
+  VALID_CUSTOM_RESOURCE,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
@@ -83,6 +84,7 @@ import {
   storageClass,
   storageClassWith,
   urlRule,
+  customResource,
 } from './helpers.js';
 
 describe('metadata', () => {
@@ -6560,5 +6562,56 @@ describe('gatewayclass', () => {
     it('leaves a parametersRef missing its required fields to the schema layer', () => {
       expectRules(gatewayClassWithParameters('    name: params\n'), ['schema/required-field']);
     });
+  });
+});
+
+describe('custom resources', () => {
+  it('checks a custom resource instead of dismissing it, noting what it could not check', () => {
+    const finding = expectRule(VALID_CUSTOM_RESOURCE, 'lint/custom-resource');
+    expect(finding.severity).toBe('info');
+    expect(finding.path).toEqual(['kind']);
+    expectRules(VALID_CUSTOM_RESOURCE, ['lint/custom-resource']);
+  });
+
+  it('leaves the CRD\'s own fields alone rather than calling them unknown', () => {
+    expectNoRule(VALID_CUSTOM_RESOURCE, 'schema/unknown-field');
+  });
+
+  it('checks the metadata every object carries', () => {
+    const finding = expectRule(customResource(undefined, '  name: Main_Prometheus\n'), 'meta/invalid-name');
+    expect(finding.path).toEqual(['metadata', 'name']);
+    expectRule(customResource(undefined, '  labels:\n    app: web\n'), 'meta/missing-name');
+    expectRule(
+      customResource(undefined, '  name: main\n  labels:\n    "bad key!": web\n'),
+      'meta/invalid-label-key',
+    );
+    expectRule(
+      customResource(undefined, '  name: main\n  annotationz:\n    a: b\n'),
+      'schema/unknown-field',
+    );
+  });
+
+  it('says nothing about a namespace, a CRD deciding its own scope', () => {
+    expectRules(customResource(undefined, '  name: main\n  namespace: monitoring\n'), [
+      'lint/custom-resource',
+    ]);
+  });
+
+  it('rejects a group no CustomResourceDefinition could declare', () => {
+    expectRule(customResource('widgets/v1'), 'customresource/invalid-group');
+    expectRule(customResource('Example.com/v1'), 'customresource/invalid-group');
+  });
+
+  it('rejects a version no CustomResourceDefinition could declare', () => {
+    expectRule(customResource('example.com/V1'), 'customresource/invalid-version');
+    expectRules(customResource('example.com/v1alpha1'), ['lint/custom-resource']);
+  });
+
+  it('still calls a kind in a Kubernetes group unsupported rather than custom', () => {
+    for (const apiVersion of ['apps/v1', 'v1', 'gateway.networking.k8s.io/v1']) {
+      expectRules(customResource(apiVersion).replace('kind: Prometheus', 'kind: ReplicaSet'), [
+        'lint/unsupported-kind',
+      ]);
+    }
   });
 });

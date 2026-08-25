@@ -10,6 +10,7 @@ import { EXAMPLES } from '../src/ui/examples.js';
 import {
   VALID_CONFIGMAP,
   VALID_CRONJOB,
+  VALID_CUSTOM_RESOURCE,
   VALID_DAEMONSET,
   VALID_DEPLOYMENT,
   VALID_GATEWAY,
@@ -33,6 +34,7 @@ import {
   VALID_STATEFULSET,
   VALID_STORAGE_CLASS,
   configMapData,
+  customResource,
   cronJobWithPodSpec,
   daemonSetWithPodSpec,
   deploymentWithPodSpec,
@@ -925,6 +927,22 @@ describe('version-sensitive rules', () => {
       expect(finding?.fix, version).toBeUndefined();
       expect(finding?.explanation, version).toContain('1.28 or newer');
       expect(finding?.explanation, version).toContain(version);
+    }
+  });
+
+  it('checks a custom resource the same way on every version', async () => {
+    // Nothing about a custom resource is version-dependent: the CRD that
+    // defines it is installed into a cluster rather than shipped with a
+    // release. The one thing that could regress is the ObjectMeta every bundle
+    // carries, which is what the metadata findings below come from.
+    for (const version of AVAILABLE_VERSIONS) {
+      expect(await ruleIdsAt(version, VALID_CUSTOM_RESOURCE), version).toEqual([
+        'lint/custom-resource',
+      ]);
+      expect(
+        await ruleIdsAt(version, customResource(undefined, '  name: Main_Prometheus\n')),
+        version,
+      ).toContain('meta/invalid-name');
     }
   });
 

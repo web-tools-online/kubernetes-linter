@@ -1,5 +1,5 @@
 import { lintSchema, isPlainObject, listKinds, type Schema } from './schema.js';
-import { KINDS } from './kinds.js';
+import { KINDS, customResourceKind } from './kinds.js';
 import { defaultSchema } from './schemas.js';
 import { parseDocuments, findDuplicateKeys, locate, locateSyntaxError, type ParsedDoc } from './parse.js';
 import { createContext } from './rules/context.js';
@@ -71,11 +71,24 @@ function lintOne(parsed: ParsedDoc, schema: Schema): Finding[] {
 
   if (!isPlainObject(value)) return findings;
 
-  const kind = result.kind === undefined ? undefined : KINDS[result.kind];
-  if (!kind) return findings;
-
-  const kindSchema = schema.for(kind.kind);
+  const kindSchema = result.kindSchema;
   if (!kindSchema) return findings;
+
+  if (result.customResource) {
+    findings.push({
+      ruleId: 'lint/custom-resource',
+      severity: 'info',
+      path: ['kind'],
+      message: `"${kindSchema.kind}" is served by a CustomResourceDefinition, so only its apiVersion, kind and metadata were checked.`,
+      explanation:
+        'A CRD is installed into a cluster rather than shipped with a Kubernetes release, so no bundled schema describes what this kind holds below its metadata. Those fields are left alone rather than reported as unknown — the CRD\'s own schema is what the apiserver validates them against.',
+    });
+  }
+
+  const kind = result.customResource
+    ? customResourceKind(kindSchema.kind)
+    : KINDS[kindSchema.kind];
+  if (!kind) return findings;
 
   const ctx = createContext(value, kind, kindSchema, findings);
   const podRules = kind.podTemplate ? POD_RULES : [];
