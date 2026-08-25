@@ -57,6 +57,57 @@ export interface SchemaBundle {
  */
 export const FALLBACK_KIND = 'Pod';
 
+/** The API groups that predate the k8s.io convention every later one follows. */
+const BUILTIN_DOTLESS_GROUPS = new Set(['apps', 'batch', 'autoscaling', 'policy', 'extensions']);
+
+/**
+ * The synthetic root a custom resource is checked against. It carries what
+ * every custom resource has in common and nothing else: its apiVersion, its
+ * kind, and the same ObjectMeta every object does. The open
+ * `additionalProperties` is what leaves the CRD's own fields alone rather than
+ * reporting them as unknown — the schema that describes them is installed into
+ * a cluster, not shipped with a release.
+ */
+const CUSTOM_RESOURCE_ROOT = 'lint.customResource';
+const CUSTOM_RESOURCE_DEFINITION: SchemaNode = {
+  type: 'object',
+  properties: {
+    apiVersion: { type: 'string' },
+    kind: { type: 'string' },
+    metadata: { $ref: '#/definitions/io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta' },
+  },
+  additionalProperties: {},
+};
+
+/**
+ * Split a custom resource's apiVersion, or return undefined when it names an
+ * API group Kubernetes serves itself: one of the five original dotless groups,
+ * or anything under k8s.io, which every group added since sits in. A
+ * CustomResourceDefinition can claim neither — its group must be a domain, and
+ * the project owns that one — so a kind no bundle carries is a custom resource
+ * exactly when its apiVersion names a group outside that set. The core group
+ * falls out for free by having no group at all.
+ *
+ * Gateway API is the deliberate miss on the k8s.io side: it ships as CRDs too,
+ * but this linter carries generated schemas for three of its kinds, and
+ * calling the rest unsupported says more than calling them unchecked.
+ */
+export function customResourceGroupVersion(
+  apiVersion: unknown,
+): { group: string; version: string } | undefined {
+  if (typeof apiVersion !== 'string') return undefined;
+  const slash = apiVersion.indexOf('/');
+  if (slash <= 0) return undefined;
+
+  const group = apiVersion.slice(0, slash);
+  const version = apiVersion.slice(slash + 1);
+  if (version === '' || version.includes('/')) return undefined;
+  if (BUILTIN_DOTLESS_GROUPS.has(group) || group === 'k8s.io' || group.endsWith('.k8s.io')) {
+    return undefined;
+  }
+  return { group, version };
+}
+
 /**
  * Definitions that are structurally objects in the spec but behave as scalars
  * on the wire. Validating them property-by-property would produce nonsense.
@@ -103,7 +154,19 @@ export class Schema {
     return view;
   }
 
+  /**
+   * A view for a kind served by a CustomResourceDefinition rather than by the
+   * apiserver's own types, over the shared root above. Unlike `for()` this
+   * builds a view rather than looking one up, so it is not cached: the kind
+   * comes from the document, and a linter re-run on every keystroke would
+   * otherwise accumulate one entry per half-typed kind name.
+   */
+  customResource(kind: string): KindSchema {
+    return new KindSchema(this, kind, CUSTOM_RESOURCE_ROOT);
+  }
+
   definition(name: string): SchemaNode | undefined {
+    if (name === CUSTOM_RESOURCE_ROOT) return CUSTOM_RESOURCE_DEFINITION;
     return this.bundle.definitions[name];
   }
 
@@ -112,8 +175,7 @@ export class Schema {
     if (!node) return { node: undefined };
     if (!node.$ref) return { node };
     const name = refName(node.$ref);
-    const target = this.bundle.definitions[name];
-    return { node: target, ref: name };
+    return { node: this.definition(name), ref: name };
   }
 }
 
@@ -214,10 +276,15 @@ export function docsUrlFrom(description: string | undefined): string | undefined
 
 export interface SchemaLintResult {
   findings: Finding[];
-  /** The kind the document was checked as, so the caller can pick its rules. */
-  kind?: string;
+  /**
+   * The view the document was checked against, so the caller can pick its
+   * rules and run them against the same schema this layer used.
+   */
+  kindSchema?: KindSchema;
   /** Set when the document declares a kind no bundled root covers. */
   unsupportedKind?: string;
+  /** Set when that kind was recognised as a custom resource instead. */
+  customResource?: boolean;
 }
 
 /** Layer 1: validate a document against the generated Kubernetes schema. */
@@ -256,7 +323,23 @@ export function lintSchema(value: unknown, schema: Schema): SchemaLintResult {
     kindSchema = typeof kind === 'string' ? schema.for(kind) : undefined;
   }
 
+  // A kind no bundle carries may still be a custom resource, in which case the
+  // apiVersion says so and there is a real object to check the metadata of.
+  let customResource = false;
+  if (!kindSchema && typeof kind === 'string' && customResourceGroupVersion(apiVersion)) {
+    kindSchema = schema.customResource(kind);
+    customResource = true;
+  }
+
   if (!kindSchema) return { findings, unsupportedKind: String(kind) };
+
+  // The apiVersion of a custom resource is the only thing that says which CRD
+  // serves it, so there is nothing to compare it against — `rules/customresource.ts`
+  // checks that it is one a CRD could have declared instead.
+  if (customResource) {
+    walk(value, { $ref: `#/definitions/${kindSchema.rootRef}` }, [], kindSchema, findings);
+    return { findings, kindSchema, customResource };
+  }
 
   const expectedApiVersion = kindSchema.apiVersion;
   const group = kindSchema.groupVersionKind.group;
@@ -293,7 +376,7 @@ export function lintSchema(value: unknown, schema: Schema): SchemaLintResult {
   }
 
   walk(value, { $ref: `#/definitions/${kindSchema.rootRef}` }, [], kindSchema, findings);
-  return { findings, kind: kindSchema.kind };
+  return { findings, kindSchema };
 }
 
 /** "Pod and Deployment", "Pod, Deployment and Job". */

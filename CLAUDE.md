@@ -107,9 +107,12 @@ wrong node on a Deployment and silently close the gate on every version.
 ### Kinds (Pod, Deployment, StatefulSet, DaemonSet, Job, CronJob, Service, Ingress, IngressClass, PersistentVolume, PersistentVolumeClaim, StorageClass, NetworkPolicy, ConfigMap, Secret, ResourceQuota, LimitRange, ServiceAccount, Role, ClusterRole, RoleBinding, ClusterRoleBinding, HTTPRoute, Gateway, GatewayClass)
 
 The kind comes from the **document**, not from a picker or a `lint()` argument: `lintSchema()`
-reads `kind`, resolves it against the bundle's `roots` map, and returns the name; `index.ts`
-looks that up in `KINDS` (`src/lint/kinds.ts`) to get a `KindDescriptor`. A kind the bundle has
-no root for still yields `unsupportedKind` and a `lint/unsupported-kind` note. Because one
+reads `kind`, resolves it against the bundle's `roots` map, and returns the `KindSchema` view it
+used; `index.ts` looks that view's kind up in `KINDS` (`src/lint/kinds.ts`) to get a
+`KindDescriptor`. A kind the bundle has
+no root for still yields `unsupportedKind` and a `lint/unsupported-kind` note, unless its
+apiVersion names a group Kubernetes does not serve itself, which makes it a custom resource
+(below). Because one
 bundle carries every root, a multi-document manifest can mix kinds with no extra chunk load —
 which is what keeps `lint()` synchronous.
 
@@ -705,6 +708,38 @@ cannot express — so they are hand-checked the same way `rules/ingress.ts` chec
 path. Deliberately skipped: anything CEL only bounds for its own sake without describing a
 contradiction, mirroring how `job.ts` skips the size caps that only bound `.status`.
 
+**A kind no bundle carries may still be a real object.** `customResourceGroupVersion()`
+(`schema.ts`) splits an apiVersion and answers whether its group is one Kubernetes serves
+itself — the five original dotless groups, and everything since under k8s.io. Anything else is
+a custom resource, and the test is exact rather than a heuristic: a CustomResourceDefinition's
+group must be a domain, and the project owns the k8s.io one. The core group falls out for free
+by having no group at all. Gateway API is the one deliberate miss on the k8s.io side — it ships
+as CRDs too, but three of its kinds have generated roots here, and calling the rest unsupported
+says more than calling them unchecked.
+
+Such a document is checked against one **synthetic root**, `CUSTOM_RESOURCE_DEFINITION`, that
+`Schema.definition()` serves alongside the bundle's own: `apiVersion`, `kind`, a `$ref` to the
+meta/v1 `ObjectMeta` every bundle already carries, and an open `additionalProperties`, which is
+what leaves everything the CRD defines alone instead of reporting it as
+`schema/unknown-field`. It is one shared constant rather than a definition per document because
+nothing about it varies — which is also why `Schema.customResource()` builds its `KindSchema`
+rather than caching one, the kind coming from text that is re-linted on every keystroke.
+`lintSchema()` then returns before its apiVersion checks: a custom resource's apiVersion is the
+only thing that says which CRD serves it, so there is nothing to compare it against, and
+`rules/customresource.ts` asks instead whether a CRD could have declared it at all.
+`index.ts` pairs the view with the descriptor `customResourceKind()` builds per
+document, and every field it leaves out is a decision: no `podTemplate`, so `POD_RULES` sit out
+even for a spec that happens to carry containers; no `clusterScoped`, since a CRD declares its
+own scope and a `metadata.namespace` therefore cannot be called forbidden; the default
+`'subdomain'` name format, which is the `NameIsDNSSubdomain` the apiserver validates every
+custom resource's name with. So what runs is `RULES` — `metadata.ts` and `enums.ts` — plus
+`rules/customresource.ts`, whose two checks are the ways an apiVersion could not have come from
+a CRD at all: a group that is not a DNS subdomain, or is one without a dot, and a version that
+is not a DNS label. It is the one rule module named for no kind, and the only one that reads
+`ctx.doc['apiVersion']`. Everything else about the object is unknowable from the document alone,
+which the `lint/custom-resource` info note says outright, as `lint/unsupported-kind` does for a
+kind that is neither.
+
 **Adding a further kind**, in order:
 
 1. A root in `ROOTS` (`scripts/generate-schema.mjs`), then `npm run gen:schema` to regenerate
@@ -808,7 +843,8 @@ them property-by-property would produce nonsense.
   `configmap/<thing>` / `secret/<thing>` / `resourcequota/<thing>` / `limitrange/<thing>` /
   `role/<thing>` / `clusterrole/<thing>` / `rolebinding/<thing>` / `httproute/<thing>` /
   `gateway/<thing>` / `gatewayclass/<thing>` for
-  checks on the object itself; the
+  checks on the object itself, and `customresource/<thing>` for the one module that belongs to
+  no kind, since a custom resource's own is whatever its CRD declared; the
   rules that run for every kind are `meta/<thing>` and `enum/<thing>`; schema-layer IDs are
   `schema/<thing>`; parser IDs are `yaml/<thing>`.
 - Findings explain *why*, usually by quoting the field's own API description and pulling its

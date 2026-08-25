@@ -4,6 +4,7 @@ import { clusterRoleBindingRule } from './rules/clusterrolebinding.js';
 import { clusterRoleRule } from './rules/clusterrole.js';
 import { configMapRule } from './rules/configmap.js';
 import { cronJobRule } from './rules/cronjob.js';
+import { customResourceRule } from './rules/customresource.js';
 import { daemonSetRule } from './rules/daemonset.js';
 import { deploymentRule } from './rules/deployment.js';
 import { gatewayRule } from './rules/gateway.js';
@@ -211,3 +212,21 @@ export const KINDS: Record<string, KindDescriptor> = {
     rules: [clusterRoleBindingRule],
   },
 };
+
+/**
+ * The descriptor a custom resource is checked under — a kind served by a
+ * CustomResourceDefinition, which no bundle carries a root for. It is built
+ * per document rather than looked up in `KINDS` because the kind name is the
+ * only thing that varies, and the messages read it.
+ *
+ * Everything else is deliberately left out. A CRD decides whether its resource
+ * is namespaced, so a `metadata.namespace` cannot be called forbidden; a CRD's
+ * schema decides what the rest of the document holds, so no PodSpec rule
+ * applies even to a kind whose spec happens to carry containers. What is left
+ * is what the apiserver validates for every custom resource alike: the
+ * object's metadata, whose name it checks as a DNS subdomain like most
+ * built-in kinds', and the apiVersion its own module reads.
+ */
+export function customResourceKind(kind: string): KindDescriptor {
+  return { kind, rules: [customResourceRule] };
+}

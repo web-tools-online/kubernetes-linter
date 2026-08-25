@@ -11,6 +11,11 @@ answer is unambiguous — apply the fix with one click.
 The kind comes from the document itself, so a multi-document manifest holding all twenty-five
 is linted correctly in one pass.
 
+A **custom resource** — a kind served by a CustomResourceDefinition rather than by Kubernetes
+itself — is checked as far as anything can be without that CRD in hand: its apiVersion, and the
+metadata every object carries. Its own fields are left alone rather than reported as unknown,
+and the finding list says so.
+
 Everything runs in the browser. The manifest never leaves the tab: there is no server, no
 upload, and the "Share link" button puts the document in the URL fragment, which browsers do
 not transmit.
@@ -76,6 +81,7 @@ schema, which OpenAPI cannot express:
 | HTTPRoute | two `parentRefs` to the same parent without a `sectionName` each, or with the same one twice, more than 128 matches across all rules, a `RequestRedirect` filter alongside `backendRefs` on the same rule, a `ReplacePrefixMatch` rewrite on a rule without exactly one `PathPrefix` match, a Service `backendRef` (the default `group`/`kind`) with no `port`, a filter list with both a `RequestRedirect` and a `URLRewrite`, or the same filter type twice, a filter whose populated field disagrees with its `type`, a `requestMirror` setting both `percent` and `fraction` or a `fraction` whose numerator exceeds its denominator, a path modifier whose populated field disagrees with its `type`, a `backendRequest` timeout longer than `request`, and a match path containing `//`, `/./`, `/../` or an escaped slash |
 | Gateway | an address whose `value` disagrees with its `type` — a hostname where the default `IPAddress` type expects a literal address, or a name that is not a DNS subdomain — the same address asked for twice, an infrastructure `labels` or `annotations` key that is not a qualified name, a `tls` block on an HTTP, TCP or UDP listener, which terminates none, an HTTPS listener whose `tls.mode` is `Passthrough`, leaving it unable to read the request it would route on, a terminating listener (the default mode) naming neither `certificateRefs` nor `options` to source a certificate from, a `hostname` on a TCP or UDP listener, which sees neither SNI nor a Host header, and two listeners agreeing on port, protocol and hostname, the second of which nothing would ever reach |
 | GatewayClass | nothing the apiserver rejects — its CRD's schema states every check it makes — but the three ways a `parametersRef` it stores verbatim resolves to nothing: a `group` written as `core` or `v1` rather than as the empty string the core group is named by, a `kind` written as the lowercase plural resource name instead of the Kind the referent declares, and a reference to a namespaced core kind with no `namespace`, which a cluster-scoped GatewayClass has none of its own to lend |
+| Custom resource | the object's name, labels, annotations and the rest of its metadata, plus an apiVersion no CustomResourceDefinition could declare — a group that is not a domain with at least one dot, or a version that is not a DNS label. Everything the CRD defines below `metadata` is left unchecked, since its schema is installed into a cluster rather than shipped with a release |
 
 The PodSpec rows apply to every kind that carries a pod template: there is one PodSpec rule
 set, addressed relative to whichever kind the document declares, so it reports against
@@ -86,7 +92,7 @@ Ingress, an IngressClass, a PersistentVolume, a PersistentVolumeClaim, a Storage
 NetworkPolicy, a ConfigMap, a Secret, a ResourceQuota, a LimitRange, a ServiceAccount, a Role,
 a ClusterRole, a RoleBinding, a ClusterRoleBinding, an HTTPRoute, a Gateway and a GatewayClass
 have no pod
-template at all, so those rules do not run for them — each is
+template at all, and neither does a custom resource, so those rules do not run for them — each is
 checked by the schema, the name and label rules every object gets, and its own row above.
 
 Hovering any field shows its type, whether it is required, and its description straight from
